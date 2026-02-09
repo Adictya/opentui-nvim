@@ -10,7 +10,7 @@ import {
 } from "@opentui/core";
 import * as child_process from "node:child_process";
 import * as assert from "node:assert";
-import { Neovim, type NeovimClient } from "neovim";
+import { Neovim, type NeovimClient, Window } from "neovim";
 import { attach, findNvim } from "neovim";
 import {
   clamp,
@@ -191,36 +191,23 @@ export class NvimRenderable extends BoxRenderable {
     const tmp: Cell[] = new Array(w * h);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const srcIdx = (t + y) * this.gridW + (l + x);
-        const c = this.grid[srcIdx];
+        const idx = (t + y) * this.gridW + (l + x);
+        const c = this.grid[idx];
         tmp[y * w + x] = c ? { ch: c.ch, hl: c.hl } : { ch: " ", hl: 0 };
-      }
-    }
-
-    // Clear region
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const dstIdx = (t + y) * this.gridW + (l + x);
-        const c = this.grid[dstIdx];
         if (c) {
           c.ch = " ";
           c.hl = 0;
         }
-      }
-    }
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const destY = y + rows;
-        const destX = x + cols;
+        const destY = y - rows;
+        const destX = x - cols;
         if (destY < 0 || destY >= h || destX < 0 || destX >= w) continue;
         const src = tmp[y * w + x];
         if (!src) continue;
         const dstIdx = (t + destY) * this.gridW + (l + destX);
-        const c = this.grid[dstIdx];
-        if (c) {
-          c.ch = src.ch;
-          c.hl = src.hl;
+        const cd = this.grid[dstIdx];
+        if (cd) {
+          cd.ch = src.ch;
+          cd.hl = src.hl;
         }
       }
     }
@@ -238,16 +225,16 @@ export class NvimRenderable extends BoxRenderable {
 
       if (typeof rawCell[1] === "number") currentHl = rawCell[1];
       let repeat = typeof rawCell[2] === "number" ? rawCell[2] : 1;
-      if (repeat === 0) {
-        // Neovim sometimes uses 0 as a compact "repeat to end of line".
-        repeat = Math.max(0, this.gridW - col);
-      }
+      // if (repeat === 0) {
+      //   // Neovim sometimes uses 0 as a compact "repeat to end of line".
+      //   repeat = Math.max(0, this.gridW - col);
+      // }
       const chars = Array.from(text);
 
-      if (row == 1 || row == 2)
+      if (row <= 2)
         renderLogger.info("line", {
           chars,
-					row,
+          row,
           col,
           repeat,
           hl: rawCell[1],
@@ -261,10 +248,7 @@ export class NvimRenderable extends BoxRenderable {
             const cell = this.grid[idx];
             if (cell) {
               cell.ch = ch.length === 0 ? " " : ch;
-              cell.hl =
-                currentHl === undefined
-                  ? cell.hl
-                  : currentHl;
+              cell.hl = currentHl === undefined ? cell.hl : currentHl;
             }
           }
           col++;
@@ -278,7 +262,7 @@ export class NvimRenderable extends BoxRenderable {
       if (!Array.isArray(ev) || ev.length === 0) continue;
       const [name, ...args] = ev as [string, ...unknown[]];
 
-      // renderLogger.debug(`redraw.${name}`, { args });
+      renderLogger.debug(`redraw.${name}`, name !== "grid_line" ? args : []);
 
       switch (name) {
         case "default_colors_set": {
@@ -428,7 +412,7 @@ export class NvimRenderable extends BoxRenderable {
           break;
         }
         case "flush": {
-					break;
+          break;
         }
         default: {
         }
@@ -496,7 +480,7 @@ export class NvimRenderable extends BoxRenderable {
 
     const input = keyEventToNvimInput(key);
     if (!input) return false;
-    renderLogger.info("sending input", key.name);
+    renderLogger.info("sending input", key.name, key.ctrl);
     void this.neovimClient.input(input);
     key.preventDefault();
     return true;

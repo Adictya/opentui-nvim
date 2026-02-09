@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { inspect } from "node:util";
+import { inspect, format } from "node:util";
 import * as winston from "winston";
 
 const splatSymbol = Symbol.for("splat");
@@ -10,6 +10,18 @@ const logFilePath = process.env.LOG_FILE
   : path.join(process.cwd(), "logs", "app.log");
 
 fs.mkdirSync(path.dirname(logFilePath), { recursive: true });
+
+function transform(info, opts) {
+  const args = info[Symbol.for("splat")];
+  if (args) {
+    info.message = format(info.message, ...args);
+  }
+  return info;
+}
+
+function utilFormatter() {
+  return { transform };
+}
 
 const lineFormatter = winston.format.printf((info) => {
   const formatValue = (value: unknown) =>
@@ -74,8 +86,12 @@ export const logger = winston.createLogger({
   level: process.env.LOG_LEVEL ?? "debug",
   format: winston.format.combine(
     winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss.SSS" }),
+    utilFormatter(), // <-- this is what changed
     winston.format.errors({ stack: true }),
-    lineFormatter,
+    winston.format.printf(
+      ({ level, message, label, timestamp }) =>
+        `${timestamp} ${label || "-"} ${level}: ${message}`,
+    ),
   ),
   transports: [
     new winston.transports.File({
