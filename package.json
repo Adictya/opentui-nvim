@@ -3,9 +3,17 @@
   "module": "index.ts",
   "type": "module",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "prettier": "^3.8.1"
   },
   "peerDependencies": {
+    "@opentui/core": "^0.1.75",
+    "@opentui/react": "^0.1.75",
+    "@opentui/solid": "^0.1.75",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "neovim": "^5.4.0",
+    "winston": "^3.19.0"
   }
 }
