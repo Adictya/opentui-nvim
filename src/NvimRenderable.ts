@@ -1,17 +1,17 @@
 import {
   BoxRenderable,
   KeyEvent,
-  MouseEvent,
   OptimizedBuffer,
   RGBA,
   TextAttributes,
+  parseColor,
   type BoxOptions,
+  type ColorInput,
   type RenderContext,
 } from "@opentui/core";
-import * as child_process from "node:child_process";
 import * as assert from "node:assert";
-import { Neovim, type NeovimClient, Window } from "neovim";
-import { attach, findNvim } from "neovim";
+import * as child_process from "node:child_process";
+import { attach, findNvim, type Buffer, type NeovimClient } from "neovim";
 import {
   clamp,
   createNvimLogger,
@@ -22,19 +22,120 @@ import {
 } from "./nvim";
 import { getLogger } from "./logger";
 
-export type NvimRenderableOptions = {
+export type NvimMode = string;
+
+export type NvimPosition = {
+  line: number;
+  col: number;
+  row?: number;
+  grid?: number;
+};
+
+export type NvimCompletionItem = {
+  word: string;
+  abbr?: string;
+  kind?: string;
+  menu?: string;
+  info?: string;
+  data?: unknown;
+};
+
+type CursorShape = "block" | "line" | "underline";
+
+type CompletionAnchor = {
+  row: number;
+  col: number;
+  grid: number;
+};
+
+export type NvimRenderableOptions = BoxOptions<NvimRenderable> & {
   argv?: string[];
   logRpc?: boolean;
-  border?: boolean;
+  value?: string;
+  wrapMode?: "none" | "char" | "word";
+  tabSize?: number;
+  lineNumbers?:
+    | boolean
+    | {
+        relative?: boolean;
+        current?: boolean;
+        width?: number | "auto";
+      };
+  textColor?: ColorInput;
+  selectionFg?: ColorInput;
+  selectionBg?: ColorInput;
+  cursorColor?: ColorInput;
+  lineNumberFg?: ColorInput;
+  lineNumberBg?: ColorInput;
+  onReady?: () => void;
+  onChange?: (e: {
+    value: string;
+    changedtick?: number;
+    cursor: NvimPosition;
+    mode: NvimMode;
+  }) => void;
+  onModeChange?: (e: {
+    mode: NvimMode;
+    previousMode: NvimMode;
+    cursorShape?: CursorShape;
+  }) => void;
+  onCursorChange?: (e: { cursor: NvimPosition; mode: NvimMode }) => void;
+  completion?: {
+    enabled?: boolean;
+    onShow?: (e: {
+      items: NvimCompletionItem[];
+      selected: number;
+      anchor: CompletionAnchor;
+    }) => void;
+    onSelect?: (e: {
+      index: number;
+      item: NvimCompletionItem | null;
+      anchor: CompletionAnchor;
+      cursor: NvimPosition;
+    }) => void;
+    onConfirm?: (e: {
+      index: number;
+      item: NvimCompletionItem;
+      cursor: NvimPosition;
+    }) => void;
+    onHide?: () => void;
+  };
 };
 
 type Cell = { ch: string; hl: number };
 
 const renderLogger = getLogger("NvimRenderable");
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function toNvimHex(color?: ColorInput): string | undefined {
+  if (!color) return undefined;
+  try {
+    const parsed = parseColor(color);
+    const [r, g, b] = parsed.toInts();
+    const toHex = (value: number) =>
+      clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0");
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function toBufferLines(text: string): string[] {
+  return text.replace(/\r\n/g, "\n").split("\n");
+}
+
 export class NvimRenderable extends BoxRenderable {
+  private readonly options: NvimRenderableOptions;
+  private readonly argv: string[];
+  private readonly completionEnabled: boolean;
+  private readonly nvimProcess: child_process.ChildProcess;
+
   private neovimClient: NeovimClient;
-  private argv: string[];
+  private readonly bootPromise: Promise<void>;
+  private shuttingDown = false;
 
   private gridW = 0;
   private gridH = 0;
@@ -42,13 +143,22 @@ export class NvimRenderable extends BoxRenderable {
 
   private cursorRow = 0;
   private cursorCol = 0;
+  private cursorGrid = 1;
+  private lastKnownCursor: NvimPosition = {
+    line: 0,
+    col: 0,
+    row: 0,
+    grid: 1,
+  };
+  private cursorSyncPending: CompletionAnchor | null = null;
+  private cursorSyncInFlight = false;
 
   private hl = new Map<number, { fg?: RGBA; bg?: RGBA; attr: number }>();
 
-  private defaultFg = RGBA.fromInts(256, 256, 256);
-  private defaultBg = RGBA.fromInts(0, 0, 0, 10);
+  private defaultFg = RGBA.fromInts(255, 255, 255, 255);
+  private defaultBg = RGBA.fromInts(0, 0, 0, 255);
 
-  private currentVimMode: string = "normal";
+  private currentVimMode: NvimMode = "normal";
   private modeInfo: Array<{
     name: string;
     short_name?: string;
@@ -59,43 +169,588 @@ export class NvimRenderable extends BoxRenderable {
     blinkoff?: number;
   }> = [];
 
+  private boundBuffer: Buffer | null = null;
+  private boundBufferId: number | null = null;
+  private boundBufferDisposers: Array<() => void> = [];
+  private lastKnownChangedtick?: number;
+
+  private shownCompletionItems: NvimCompletionItem[] = [];
+  private popupmenuVisible = false;
+  private popupmenuItems: NvimCompletionItem[] = [];
+  private popupmenuSelected = -1;
+  private popupmenuAnchor: CompletionAnchor = { row: 0, col: 0, grid: 0 };
+  private lastCompletionStartCol = 0;
+  private hideCompletionRequested = false;
+  private pendingConfirmIndex: number | null = null;
+
   constructor(ctx: RenderContext, options: NvimRenderableOptions = {}) {
     super(ctx, {
       ...options,
       buffered: true,
-      border: false,
-      flexGrow: 1,
+      flexGrow: options.flexGrow ?? 1,
     } as BoxOptions);
-    this.argv = options.argv ?? ["--headless", "--embed"];
+
+    this.options = options;
+    this.argv = options.argv ?? ["--clean", "--headless", "--embed"];
+    this.completionEnabled = options.completion
+      ? options.completion.enabled !== false
+      : false;
     this._focusable = true;
 
     const found = findNvim({ orderBy: "desc", minVersion: "0.9.0" });
-    assert.ok(found.matches[0]);
+    assert.ok(found.matches[0], "No compatible Neovim binary found");
+    const nvimPath = found.matches[0].path;
 
-    const nvim_proc = child_process.spawn(found.matches[0].path, this.argv, {});
+    this.nvimProcess = child_process.spawn(nvimPath, this.argv, {
+      stdio: "pipe",
+    });
+
     this.neovimClient = attach({
-      proc: nvim_proc,
+      proc: this.nvimProcess,
       options: {
-        logger: createNvimLogger(!!options.logRpc),
+        logger: createNvimLogger(Boolean(options.logRpc)),
       },
     });
+
     this.neovimClient.on("notification", (method: string, args: unknown[]) => {
       if (method === "redraw") {
         this.applyRedrawEvents(args);
       }
-      // console.log("recieved", ...args);
     });
 
-    const self = this;
-    (async () => {
-      await self.neovimClient.uiAttach(this.width || 1, this.height || 1, {
-        ext_linegrid: true,
-        ext_multigrid: false,
-        ext_cmdline: false,
-        ext_popupmenu: false,
-        rgb: true,
+    this.bootPromise = this.bootstrap();
+    void this.bootPromise.catch((error: unknown) => {
+      renderLogger.error("Failed to bootstrap Neovim client", error);
+    });
+  }
+
+  public async getValue(): Promise<string> {
+    await this.bootPromise;
+    const buffer = this.requireBoundBuffer();
+    return this.readBufferValue(buffer);
+  }
+
+  public async setValue(text: string): Promise<void> {
+    await this.bootPromise;
+    const buffer = this.requireBoundBuffer();
+    await this.writeBufferValue(buffer, text);
+  }
+
+  public getMode(): NvimMode {
+    return this.currentVimMode;
+  }
+
+  public async showCompletion(
+    items: NvimCompletionItem[],
+    opts?: { startCol?: number; selected?: number },
+  ): Promise<void> {
+    await this.bootPromise;
+
+    const startCol =
+      typeof opts?.startCol === "number"
+        ? Math.max(0, Math.floor(opts.startCol))
+        : await this.getCurrentBufferColumn();
+
+    this.lastCompletionStartCol = startCol;
+    this.shownCompletionItems = [...items];
+    this.popupmenuAnchor = {
+      row: this.lastKnownCursor.row ?? this.cursorRow,
+      col: startCol,
+      grid: this.lastKnownCursor.grid ?? this.cursorGrid,
+    };
+    this.hideCompletionRequested = false;
+    this.pendingConfirmIndex = null;
+
+    const completeItems = items.map((item) => this.toVimCompleteItem(item));
+    await this.neovimClient.call("complete", [startCol + 1, completeItems]);
+
+    if (isFiniteNumber(opts?.selected)) {
+      await this.neovimClient.selectPopupmenuItem(
+        Math.floor(opts.selected),
+        false,
+        false,
+        {},
+      );
+    }
+
+    if (!this.completionEnabled) {
+      const selected =
+        typeof opts?.selected === "number" ? Math.floor(opts.selected) : -1;
+      this.options.completion?.onShow?.({
+        items: [...items],
+        selected,
+        anchor: { ...this.popupmenuAnchor },
       });
-    })();
+    }
+  }
+
+  public async updateCompletion(items: NvimCompletionItem[]): Promise<void> {
+    const selected =
+      this.popupmenuSelected >= 0 ? this.popupmenuSelected : undefined;
+    await this.showCompletion(items, {
+      startCol: this.lastCompletionStartCol,
+      selected,
+    });
+  }
+
+  public async hideCompletion(): Promise<void> {
+    await this.bootPromise;
+    this.hideCompletionRequested = true;
+    this.pendingConfirmIndex = null;
+    await this.neovimClient.selectPopupmenuItem(-1, false, true, {});
+    if (!this.completionEnabled) {
+      this.options.completion?.onHide?.();
+    }
+  }
+
+  public async selectCompletion(
+    index: number,
+    opts?: { insert?: boolean; finish?: boolean },
+  ): Promise<void> {
+    await this.bootPromise;
+
+    const normalizedIndex = Math.floor(index);
+    const finish = opts?.finish === true;
+    const insert = finish || opts?.insert === true;
+
+    this.pendingConfirmIndex = finish ? normalizedIndex : null;
+    await this.neovimClient.selectPopupmenuItem(
+      normalizedIndex,
+      insert,
+      finish,
+      {},
+    );
+
+    if (!this.completionEnabled) {
+      const item = this.getCompletionItem(normalizedIndex);
+      this.options.completion?.onSelect?.({
+        index: normalizedIndex,
+        item,
+        anchor: { ...this.popupmenuAnchor },
+        cursor: this.getCursorSnapshot(),
+      });
+
+      if (finish && item) {
+        this.options.completion?.onConfirm?.({
+          index: normalizedIndex,
+          item,
+          cursor: this.getCursorSnapshot(),
+        });
+      }
+    }
+  }
+
+  private async bootstrap() {
+    const rect = this.getContentRect();
+    const cols = toNvimInt(rect.width, 1);
+    const rows = toNvimInt(rect.height, 1);
+
+    await this.neovimClient.uiAttach(cols, rows, {
+      ext_linegrid: true,
+      ext_multigrid: false,
+      ext_cmdline: false,
+      ext_popupmenu: this.completionEnabled,
+      rgb: true,
+    });
+
+    await this.bindToFirstBuffer();
+    await this.applyEditorOptions();
+    await this.applyColorOverrides();
+
+    if (typeof this.options.value === "string" && this.boundBuffer) {
+      await this.writeBufferValue(this.boundBuffer, this.options.value);
+    }
+
+    try {
+      const mode = await this.neovimClient.mode;
+      if (mode && typeof mode.mode === "string") {
+        this.currentVimMode = mode.mode;
+      }
+    } catch {
+      // Ignore: mode is best-effort at bootstrap.
+    }
+
+    this.queueCursorSync();
+
+    this.options.onReady?.();
+  }
+
+  private requireBoundBuffer(): Buffer {
+    if (!this.boundBuffer) {
+      throw new Error("Neovim buffer binding is not ready");
+    }
+    return this.boundBuffer;
+  }
+
+  private async bindToFirstBuffer() {
+    const buffers = await this.neovimClient.buffers;
+    const firstBuffer = buffers[0];
+    if (!firstBuffer) {
+      throw new Error("Neovim did not expose any buffers");
+    }
+
+    this.boundBuffer = firstBuffer;
+    this.boundBufferId = firstBuffer.id;
+
+    const stopLines = firstBuffer.listen("lines", (...eventArgs: unknown[]) => {
+      void this.handleBoundBufferLines(eventArgs);
+    });
+    const stopChangedtick = firstBuffer.listen(
+      "changedtick",
+      (...eventArgs: unknown[]) => {
+        void this.handleBoundBufferChangedtick(eventArgs);
+      },
+    );
+    const stopDetach = firstBuffer.listen(
+      "detach",
+      (...eventArgs: unknown[]) => {
+        this.handleBoundBufferDetach(eventArgs);
+      },
+    );
+
+    this.boundBufferDisposers.push(
+      () => {
+        stopLines();
+      },
+      () => {
+        stopChangedtick();
+      },
+      () => {
+        stopDetach();
+      },
+    );
+  }
+
+  private async handleBoundBufferLines(eventArgs: unknown[]) {
+    const [bufferLike, changedtick] = eventArgs;
+    if (!this.isBoundBuffer(bufferLike)) return;
+
+    if (changedtick === null) {
+      return;
+    }
+    if (typeof changedtick === "number") {
+      this.lastKnownChangedtick = changedtick;
+    }
+
+    await this.emitOnChange(this.lastKnownChangedtick);
+  }
+
+  private async handleBoundBufferChangedtick(eventArgs: unknown[]) {
+    const [bufferLike, changedtick] = eventArgs;
+    if (!this.isBoundBuffer(bufferLike)) return;
+    if (typeof changedtick !== "number") return;
+
+    this.lastKnownChangedtick = changedtick;
+    await this.emitOnChange(changedtick);
+  }
+
+  private handleBoundBufferDetach(eventArgs: unknown[]) {
+    const [bufferLike] = eventArgs;
+    if (!this.isBoundBuffer(bufferLike)) return;
+
+    renderLogger.warn(
+      "Bound buffer detached; staying pinned to initial buffer id",
+      this.boundBufferId,
+    );
+  }
+
+  private isBoundBuffer(bufferLike: unknown): boolean {
+    if (this.boundBufferId === null) return false;
+    return this.extractBufferId(bufferLike) === this.boundBufferId;
+  }
+
+  private extractBufferId(bufferLike: unknown): number | null {
+    if (typeof bufferLike === "number") return bufferLike;
+    if (!bufferLike || typeof bufferLike !== "object") return null;
+
+    const candidateId = (bufferLike as { id?: unknown }).id;
+    if (typeof candidateId === "number") return candidateId;
+
+    const candidateData = (bufferLike as { data?: unknown }).data;
+    if (typeof candidateData === "number") return candidateData;
+
+    return null;
+  }
+
+  private async emitOnChange(changedtick?: number) {
+    if (!this.options.onChange || !this.boundBuffer) return;
+
+    try {
+      const value = await this.readBufferValue(this.boundBuffer);
+      this.options.onChange({
+        value,
+        changedtick,
+        cursor: this.getCursorSnapshot(),
+        mode: this.currentVimMode,
+      });
+    } catch (error) {
+      renderLogger.error("Failed to emit onChange callback", error);
+    }
+  }
+
+  private async readBufferValue(buffer: Buffer): Promise<string> {
+    const lines = await buffer.lines;
+    return lines.join("\n");
+  }
+
+  private async writeBufferValue(buffer: Buffer, text: string): Promise<void> {
+    const lines = toBufferLines(text);
+    await buffer.setLines(lines, {
+      start: 0,
+      end: -1,
+      strictIndexing: false,
+    });
+  }
+
+  private async applyEditorOptions() {
+    const commands: string[] = [];
+
+    switch (this.options.wrapMode) {
+      case "none":
+        commands.push("setlocal nowrap nolinebreak");
+        break;
+      case "char":
+        commands.push("setlocal wrap nolinebreak");
+        break;
+      case "word":
+        commands.push("setlocal wrap linebreak");
+        break;
+      default:
+        break;
+    }
+
+    if (isFiniteNumber(this.options.tabSize)) {
+      const tabSize = Math.max(1, Math.floor(this.options.tabSize));
+      commands.push(`setlocal tabstop=${tabSize}`);
+      commands.push(`setlocal shiftwidth=${tabSize}`);
+      commands.push(`setlocal softtabstop=${tabSize}`);
+    }
+
+    const lineNumbers = this.options.lineNumbers;
+    if (typeof lineNumbers === "boolean") {
+      if (lineNumbers) {
+        commands.push("setlocal number norelativenumber");
+      } else {
+        commands.push("setlocal nonumber norelativenumber");
+      }
+    } else if (lineNumbers) {
+      const relative = lineNumbers.relative === true;
+      const current = lineNumbers.current !== false;
+      const numberFlag = current ? "number" : "nonumber";
+      const relativeFlag = relative ? "relativenumber" : "norelativenumber";
+      commands.push(`setlocal ${numberFlag} ${relativeFlag}`);
+
+      if (isFiniteNumber(lineNumbers.width)) {
+        const width = Math.max(1, Math.floor(lineNumbers.width));
+        commands.push(`setlocal numberwidth=${width}`);
+      }
+    }
+
+    for (const command of commands) {
+      try {
+        await this.neovimClient.command(command);
+      } catch (error) {
+        renderLogger.warn("Failed to apply Neovim option", { command, error });
+      }
+    }
+  }
+
+  private async applyColorOverrides() {
+    await this.applyHighlightOverride("Normal", {
+      fg: this.options.textColor,
+    });
+    await this.applyHighlightOverride("Visual", {
+      fg: this.options.selectionFg,
+      bg: this.options.selectionBg,
+    });
+    await this.applyHighlightOverride("Cursor", {
+      bg: this.options.cursorColor,
+    });
+    await this.applyHighlightOverride("LineNr", {
+      fg: this.options.lineNumberFg,
+      bg: this.options.lineNumberBg,
+    });
+    await this.applyHighlightOverride("CursorLineNr", {
+      fg: this.options.lineNumberFg,
+      bg: this.options.lineNumberBg,
+    });
+  }
+
+  private async applyHighlightOverride(
+    group: string,
+    colors: { fg?: ColorInput; bg?: ColorInput },
+  ) {
+    const fg = toNvimHex(colors.fg);
+    const bg = toNvimHex(colors.bg);
+    const attrs: string[] = [];
+    if (fg) attrs.push(`guifg=${fg}`);
+    if (bg) attrs.push(`guibg=${bg}`);
+    if (attrs.length === 0) return;
+
+    try {
+      await this.neovimClient.command(`highlight ${group} ${attrs.join(" ")}`);
+    } catch (error) {
+      renderLogger.warn("Failed to apply highlight override", {
+        group,
+        error,
+      });
+    }
+  }
+
+  private getCursorSnapshot(): NvimPosition {
+    return {
+      line: this.lastKnownCursor.line,
+      col: this.lastKnownCursor.col,
+      row: this.lastKnownCursor.row,
+      grid: this.lastKnownCursor.grid,
+    };
+  }
+
+  private queueCursorSync(row?: number, col?: number, grid?: number) {
+    this.cursorSyncPending = {
+      row: isFiniteNumber(row)
+        ? row
+        : (this.lastKnownCursor.row ?? this.cursorRow),
+      col: isFiniteNumber(col)
+        ? col
+        : (this.lastKnownCursor.col ?? this.cursorCol),
+      grid: isFiniteNumber(grid)
+        ? grid
+        : (this.lastKnownCursor.grid ?? this.cursorGrid),
+    };
+
+    if (this.cursorSyncInFlight) return;
+    this.cursorSyncInFlight = true;
+    void this.flushCursorSync();
+  }
+
+  private async flushCursorSync() {
+    while (this.cursorSyncPending) {
+      const pending = this.cursorSyncPending;
+      this.cursorSyncPending = null;
+
+      try {
+        const window = await this.neovimClient.window;
+        const [line, col] = await window.cursor;
+        this.lastKnownCursor = {
+          line: Math.max(0, line - 1),
+          col: Math.max(0, col),
+          row: pending.row,
+          grid: pending.grid,
+        };
+        this.options.onCursorChange?.({
+          cursor: this.getCursorSnapshot(),
+          mode: this.currentVimMode,
+        });
+      } catch {
+        // Keep redraw-derived cursor if RPC cursor lookup fails.
+      }
+    }
+
+    this.cursorSyncInFlight = false;
+  }
+
+  private async getCurrentBufferColumn(): Promise<number> {
+    try {
+      const window = await this.neovimClient.window;
+      const [, col] = await window.cursor;
+      return Math.max(0, col);
+    } catch {
+      return Math.max(0, this.lastKnownCursor.col);
+    }
+  }
+
+  private toVimCompleteItem(item: NvimCompletionItem): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      word: item.word,
+    };
+
+    if (item.abbr !== undefined) payload.abbr = item.abbr;
+    if (item.kind !== undefined) payload.kind = item.kind;
+    if (item.menu !== undefined) payload.menu = item.menu;
+    if (item.info !== undefined) payload.info = item.info;
+
+    if (item.data !== undefined) {
+      try {
+        payload.user_data = JSON.stringify(item.data);
+      } catch {
+        // Best-effort only.
+      }
+    }
+
+    return payload;
+  }
+
+  private normalizePopupmenuItem(
+    raw: unknown,
+    index: number,
+  ): NvimCompletionItem {
+    const fallback = this.shownCompletionItems[index];
+
+    if (Array.isArray(raw)) {
+      const [abbrRaw, kindRaw, menuRaw, infoRaw] = raw;
+      const abbr = typeof abbrRaw === "string" ? abbrRaw : undefined;
+      const kind = typeof kindRaw === "string" ? kindRaw : undefined;
+      const menu = typeof menuRaw === "string" ? menuRaw : undefined;
+      const info = typeof infoRaw === "string" ? infoRaw : undefined;
+
+      return {
+        word: fallback?.word ?? abbr ?? "",
+        abbr: fallback?.abbr ?? abbr,
+        kind: fallback?.kind ?? kind,
+        menu: fallback?.menu ?? menu,
+        info: fallback?.info ?? info,
+        data: fallback?.data,
+      };
+    }
+
+    if (raw && typeof raw === "object") {
+      const rawRecord = raw as Record<string, unknown>;
+      const word =
+        typeof rawRecord.word === "string"
+          ? rawRecord.word
+          : (fallback?.word ?? "");
+      return {
+        word,
+        abbr:
+          typeof rawRecord.abbr === "string" ? rawRecord.abbr : fallback?.abbr,
+        kind:
+          typeof rawRecord.kind === "string" ? rawRecord.kind : fallback?.kind,
+        menu:
+          typeof rawRecord.menu === "string" ? rawRecord.menu : fallback?.menu,
+        info:
+          typeof rawRecord.info === "string" ? rawRecord.info : fallback?.info,
+        data: fallback?.data,
+      };
+    }
+
+    return {
+      word: fallback?.word ?? "",
+      abbr: fallback?.abbr,
+      kind: fallback?.kind,
+      menu: fallback?.menu,
+      info: fallback?.info,
+      data: fallback?.data,
+    };
+  }
+
+  private getCompletionItem(index: number): NvimCompletionItem | null {
+    if (index < 0) return null;
+    return (
+      this.popupmenuItems[index] ?? this.shownCompletionItems[index] ?? null
+    );
+  }
+
+  private emitCompletionSelect(index: number) {
+    const callback = this.options.completion?.onSelect;
+    if (!callback) return;
+
+    callback({
+      index,
+      item: this.getCompletionItem(index),
+      anchor: { ...this.popupmenuAnchor },
+      cursor: this.getCursorSnapshot(),
+    });
   }
 
   private getContentRect() {
@@ -224,21 +879,8 @@ export class NvimRenderable extends BoxRenderable {
       if (typeof text !== "string") continue;
 
       if (typeof rawCell[1] === "number") currentHl = rawCell[1];
-      let repeat = typeof rawCell[2] === "number" ? rawCell[2] : 1;
-      // if (repeat === 0) {
-      //   // Neovim sometimes uses 0 as a compact "repeat to end of line".
-      //   repeat = Math.max(0, this.gridW - col);
-      // }
+      const repeat = typeof rawCell[2] === "number" ? rawCell[2] : 1;
       const chars = Array.from(text);
-
-      if (row <= 2)
-        renderLogger.info("line", {
-          chars,
-          row,
-          col,
-          repeat,
-          hl: rawCell[1],
-        });
 
       for (let rep = 0; rep < repeat; rep++) {
         for (const ch of chars) {
@@ -248,7 +890,7 @@ export class NvimRenderable extends BoxRenderable {
             const cell = this.grid[idx];
             if (cell) {
               cell.ch = ch.length === 0 ? " " : ch;
-              cell.hl = currentHl === undefined ? cell.hl : currentHl;
+              cell.hl = currentHl;
             }
           }
           col++;
@@ -262,19 +904,16 @@ export class NvimRenderable extends BoxRenderable {
       if (!Array.isArray(ev) || ev.length === 0) continue;
       const [name, ...args] = ev as [string, ...unknown[]];
 
-      renderLogger.debug(`redraw.${name}`, name !== "grid_line" ? args : []);
-
       switch (name) {
         case "default_colors_set": {
-          // Calls: [rgb_fg, rgb_bg, rgb_sp, cterm_fg, cterm_bg]
           for (const call of args) {
             if (!Array.isArray(call) || call.length < 2) continue;
             const fg = call[0];
             const bg = call[1];
             if (typeof fg === "number") this.defaultFg = nvimRgbToRgba(fg);
             if (typeof bg === "number") this.defaultBg = nvimRgbToRgba(bg);
-            this.requestRender();
           }
+          this.requestRender();
           break;
         }
         case "hl_attr_define": {
@@ -290,40 +929,51 @@ export class NvimRenderable extends BoxRenderable {
               typeof id !== "number" ||
               typeof rgbAttrs !== "object" ||
               !rgbAttrs
-            )
+            ) {
               continue;
+            }
 
             this.hl.set(id, this.parseHl(rgbAttrs));
-            if (id == 0) renderLogger.info("default hl", this.hl.get(0));
           }
           break;
         }
         case "grid_resize": {
           for (const call of args) {
             if (!Array.isArray(call) || call.length < 3) continue;
-            const [grid, w, h] = call as [number, number, number];
+            const [, w, h] = call as [number, number, number];
             if (typeof w === "number" && typeof h === "number") {
               this.resizeGrid(w, h);
-              this.requestRender();
             }
           }
+          this.requestRender();
           break;
         }
         case "grid_clear": {
           for (const call of args) {
             if (!Array.isArray(call) || call.length < 1) continue;
-            const [grid] = call as [number];
             this.clearGrid();
-            this.requestRender();
           }
+          this.requestRender();
           break;
         }
         case "grid_cursor_goto": {
           for (const call of args) {
             if (!Array.isArray(call) || call.length < 3) continue;
             const [grid, row, col] = call as [number, number, number];
-            // if (typeof row === "number") this.cursorRow = row;
-            // if (typeof col === "number") this.cursorCol = col;
+            if (typeof row !== "number" || typeof col !== "number") continue;
+
+            this.cursorRow = row;
+            this.cursorCol = col;
+            if (typeof grid === "number") {
+              this.cursorGrid = grid;
+            }
+
+            this.lastKnownCursor = {
+              line: row,
+              col,
+              row,
+              grid: this.cursorGrid,
+            };
 
             if (this.focused) {
               const x = this.x + col;
@@ -335,6 +985,13 @@ export class NvimRenderable extends BoxRenderable {
             } else {
               this.ctx.setCursorPosition(1, 1, false);
             }
+
+            this.options.onCursorChange?.({
+              cursor: this.getCursorSnapshot(),
+              mode: this.currentVimMode,
+            });
+
+            this.queueCursorSync(row, col, this.cursorGrid);
           }
           this.requestRender();
           break;
@@ -342,7 +999,7 @@ export class NvimRenderable extends BoxRenderable {
         case "grid_scroll": {
           for (const call of args) {
             if (!Array.isArray(call) || call.length < 7) continue;
-            const [grid, top, bot, left, right, rows, cols] = call as [
+            const [, top, bot, left, right, rows, cols] = call as [
               number,
               number,
               number,
@@ -352,14 +1009,14 @@ export class NvimRenderable extends BoxRenderable {
               number,
             ];
             this.scrollGrid(top, bot, left, right, rows, cols);
-            this.requestRender();
           }
+          this.requestRender();
           break;
         }
         case "grid_line": {
           for (const call of args) {
-            if (!Array.isArray(call) || call.length < 5) continue;
-            const [grid, row, colStart, cells] = call as [
+            if (!Array.isArray(call) || call.length < 4) continue;
+            const [, row, colStart, cells] = call as [
               number,
               number,
               number,
@@ -374,8 +1031,8 @@ export class NvimRenderable extends BoxRenderable {
               continue;
             }
             this.applyGridLine(row, colStart, cells);
-            this.requestRender();
           }
+          this.requestRender();
           break;
         }
         case "mode_info_set": {
@@ -403,11 +1060,106 @@ export class NvimRenderable extends BoxRenderable {
           for (const call of args) {
             if (!Array.isArray(call) || call.length < 2) continue;
             const [modeName] = call as [string, number];
+            const previousMode = this.currentVimMode;
             if (typeof modeName === "string") {
               this.currentVimMode = modeName;
             }
             const cursorStyle = this.getCursorStyleForMode();
             this.ctx.setCursorStyle(cursorStyle, false);
+
+            if (previousMode !== this.currentVimMode) {
+              this.options.onModeChange?.({
+                mode: this.currentVimMode,
+                previousMode,
+                cursorShape: cursorStyle,
+              });
+            }
+
+            this.options.onCursorChange?.({
+              cursor: this.getCursorSnapshot(),
+              mode: this.currentVimMode,
+            });
+          }
+          break;
+        }
+        case "popupmenu_show": {
+          for (const call of args) {
+            if (!Array.isArray(call) || call.length < 5) continue;
+            const [items, selected, row, col, grid] = call as [
+              unknown[],
+              number,
+              number,
+              number,
+              number,
+            ];
+
+            this.popupmenuVisible = true;
+            this.popupmenuSelected =
+              typeof selected === "number" ? selected : -1;
+            this.popupmenuAnchor = {
+              row: typeof row === "number" ? row : 0,
+              col: typeof col === "number" ? col : 0,
+              grid: typeof grid === "number" ? grid : 0,
+            };
+            this.popupmenuItems = Array.isArray(items)
+              ? items.map((item, index) =>
+                  this.normalizePopupmenuItem(item, index),
+                )
+              : [];
+            this.hideCompletionRequested = false;
+            this.pendingConfirmIndex = null;
+
+            if (this.completionEnabled) {
+              this.options.completion?.onShow?.({
+                items: [...this.popupmenuItems],
+                selected: this.popupmenuSelected,
+                anchor: { ...this.popupmenuAnchor },
+              });
+              if (this.popupmenuSelected >= 0) {
+                this.emitCompletionSelect(this.popupmenuSelected);
+              }
+            }
+          }
+          break;
+        }
+        case "popupmenu_select": {
+          for (const call of args) {
+            if (!Array.isArray(call) || call.length < 1) continue;
+            const [selected] = call as [number];
+            this.popupmenuSelected =
+              typeof selected === "number" ? selected : -1;
+            if (this.completionEnabled) {
+              this.emitCompletionSelect(this.popupmenuSelected);
+            }
+          }
+          break;
+        }
+        case "popupmenu_hide": {
+          const confirmIndex =
+            this.pendingConfirmIndex ?? this.popupmenuSelected;
+          const confirmItem = this.getCompletionItem(confirmIndex);
+          const shouldEmitConfirm =
+            this.completionEnabled &&
+            !this.hideCompletionRequested &&
+            confirmIndex >= 0 &&
+            !!confirmItem;
+
+          this.popupmenuVisible = false;
+          this.popupmenuSelected = -1;
+          this.popupmenuItems = [];
+          this.pendingConfirmIndex = null;
+          this.hideCompletionRequested = false;
+
+          if (shouldEmitConfirm && confirmItem) {
+            this.options.completion?.onConfirm?.({
+              index: confirmIndex,
+              item: confirmItem,
+              cursor: this.getCursorSnapshot(),
+            });
+          }
+
+          if (this.completionEnabled) {
+            this.options.completion?.onHide?.();
           }
           break;
         }
@@ -415,12 +1167,13 @@ export class NvimRenderable extends BoxRenderable {
           break;
         }
         default: {
+          break;
         }
       }
     }
   }
 
-  private getCursorStyleForMode(): "block" | "line" | "underline" {
+  private getCursorStyleForMode(): CursorShape {
     const modeInfo = this.modeInfo.find((m) => m.name === this.currentVimMode);
     if (modeInfo?.cursor_shape) {
       switch (modeInfo.cursor_shape) {
@@ -434,7 +1187,6 @@ export class NvimRenderable extends BoxRenderable {
       }
     }
 
-    // Default mappings if mode_info not available
     switch (this.currentVimMode) {
       case "insert":
       case "cmdline_insert":
@@ -456,10 +1208,15 @@ export class NvimRenderable extends BoxRenderable {
     super.onResize(width, height);
 
     const rect = this.getContentRect();
-    renderLogger.info("Parsing onResize", { width, height, rect });
     const cols = toNvimInt(rect.width, 1);
     const rows = toNvimInt(rect.height, 1);
-    await this.neovimClient.uiTryResize(cols, rows);
+
+    try {
+      await this.bootPromise;
+      await this.neovimClient.uiTryResize(cols, rows);
+    } catch {
+      // Ignore resize races during startup/shutdown.
+    }
   }
 
   private resolveStyle(hlId: number) {
@@ -480,28 +1237,25 @@ export class NvimRenderable extends BoxRenderable {
 
     const input = keyEventToNvimInput(key);
     if (!input) return false;
-    renderLogger.info("sending input", key.name, key.ctrl);
     void this.neovimClient.input(input);
     key.preventDefault();
     return true;
   }
 
   protected override renderSelf(buffer: OptimizedBuffer) {
-    // super.renderSelf(buffer);
-
     const rect = this.getContentRect();
-    renderLogger.info("Rendered", rect, this.y);
 
     if (this.gridW === 0 || this.gridH === 0) {
       buffer.drawText(
         "Neovim attached, waiting for redraw...",
         rect.x,
         rect.y,
-        RGBA.fromInts(256, 256, 256),
-        RGBA.fromInts(0, 0, 0, 0),
+        RGBA.fromInts(255, 255, 255, 255),
+        RGBA.fromInts(0, 0, 0, 255),
       );
       return;
     }
+
     const drawW = Math.min(rect.width, this.gridW);
     const drawH = Math.min(rect.height, this.gridH);
 
@@ -519,6 +1273,46 @@ export class NvimRenderable extends BoxRenderable {
           style.attr,
         );
       }
+    }
+  }
+
+  protected override destroySelf(): void {
+    void this.shutdown();
+    super.destroySelf();
+  }
+
+  private async shutdown() {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+
+    for (const dispose of this.boundBufferDisposers.splice(0)) {
+      try {
+        dispose();
+      } catch {
+        // Ignore disposer failures during shutdown.
+      }
+    }
+
+    try {
+      await this.neovimClient.uiDetach();
+    } catch {
+      // Ignore if UI was never attached.
+    }
+
+    try {
+      this.neovimClient.quit();
+    } catch {
+      // Ignore if transport already closed.
+    }
+
+    try {
+      await this.neovimClient.close();
+    } catch {
+      // Ignore close errors.
+    }
+
+    if (!this.nvimProcess.killed) {
+      this.nvimProcess.kill();
     }
   }
 }
