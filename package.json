@@ -2,6 +2,10 @@
   "name": "opentui-nvim",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "test:api": "bun test tests/api-surface.test.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "prettier": "^3.8.1"
