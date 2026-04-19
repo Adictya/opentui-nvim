@@ -11,9 +11,9 @@ const logFilePath = process.env.LOG_FILE
 
 fs.mkdirSync(path.dirname(logFilePath), { recursive: true });
 
-function transform(info, opts) {
+function transform(info: winston.Logform.TransformableInfo, _opts?: unknown) {
   const args = info[Symbol.for("splat")];
-  if (args) {
+  if (args instanceof Array) {
     info.message = format(info.message, ...args);
   }
   return info;

@@ -20,8 +20,8 @@ import {
   nvimRgbToRgba,
   toNvimInt,
   type NvimHlAttrs,
-} from "./nvim";
-import { getLogger } from "./logger";
+} from "./nvim.ts";
+import { getLogger } from "./logger.ts";
 
 export type NvimMode = string;
 
@@ -202,22 +202,22 @@ export class NvimRenderable extends BoxRenderable {
     assert.ok(found.matches[0], "No compatible Neovim binary found");
     const nvimPath = found.matches[0].path;
 
-    // this.nvimProcess = child_process.spawn(nvimPath, this.argv, {
-    //   stdio: "pipe",
-    // });
+    this.nvimProcess = child_process.spawn(nvimPath, this.argv, {
+      stdio: "pipe",
+    });
 
-    // this.neovimClient = attach({
-    //   proc: this.nvimProcess,
-    //   options: {
-    //     logger: createNvimLogger(Boolean(options.logRpc)),
-    //   },
-    // });
-    //
-    // this.neovimClient.on("notification", (method: string, args: unknown[]) => {
-    //   if (method === "redraw") {
-    //     this.applyRedrawEvents(args);
-    //   }
-    // });
+    this.neovimClient = attach({
+      proc: this.nvimProcess,
+      options: {
+        logger: createNvimLogger(Boolean(options.logRpc)),
+      },
+    });
+
+    this.neovimClient.on("notification", (method: string, args: unknown[]) => {
+      if (method === "redraw") {
+        this.applyRedrawEvents(args);
+      }
+    });
 
     this.bootPromise = this.bootstrap();
     void this.bootPromise.catch((error: unknown) => {
@@ -559,6 +559,7 @@ export class NvimRenderable extends BoxRenderable {
   private async applyColorOverrides() {
     await this.applyHighlightOverride("Normal", {
       fg: this.options.textColor,
+      bg: this.options.backgroundColor,
     });
     await this.applyHighlightOverride("Visual", {
       fg: this.options.selectionFg,

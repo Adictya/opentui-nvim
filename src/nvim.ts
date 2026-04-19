@@ -1,6 +1,6 @@
 import { KeyEvent, RGBA } from "@opentui/core";
 import { formatWithOptions, inspect } from "node:util";
-import { getLogger } from "./logger";
+import { getLogger } from "./logger.ts";
 
 export type NvimHlAttrs = {
   bold?: boolean;

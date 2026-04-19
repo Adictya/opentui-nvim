@@ -4,4 +4,4 @@ export {
   type NvimMode,
   type NvimPosition,
   type NvimRenderableOptions,
-} from "./src/NvimRenderable";
+} from "./src/NvimRenderable.ts";
