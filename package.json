@@ -17,6 +17,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@opencode-ai/plugin": "^1.14.18",
     "neovim": "^5.4.0",
     "winston": "^3.19.0"
   }

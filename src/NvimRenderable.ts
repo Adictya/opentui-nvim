@@ -7,6 +7,7 @@ import {
   parseColor,
   type BoxOptions,
   type ColorInput,
+  type CursorStyleOptions,
   type RenderContext,
 } from "@opentui/core";
 import * as assert from "node:assert";
@@ -40,7 +41,7 @@ export type NvimCompletionItem = {
   data?: unknown;
 };
 
-type CursorShape = "block" | "line" | "underline";
+type CursorStyle = CursorStyleOptions;
 
 type CompletionAnchor = {
   row: number;
@@ -77,7 +78,7 @@ export type NvimRenderableOptions = BoxOptions<NvimRenderable> & {
   onModeChange?: (e: {
     mode: NvimMode;
     previousMode: NvimMode;
-    cursorShape?: CursorShape;
+    cursorShape?: CursorStyle;
   }) => void;
   onCursorChange?: (e: { cursor: NvimPosition; mode: NvimMode }) => void;
   completion?: {
@@ -201,22 +202,22 @@ export class NvimRenderable extends BoxRenderable {
     assert.ok(found.matches[0], "No compatible Neovim binary found");
     const nvimPath = found.matches[0].path;
 
-    this.nvimProcess = child_process.spawn(nvimPath, this.argv, {
-      stdio: "pipe",
-    });
+    // this.nvimProcess = child_process.spawn(nvimPath, this.argv, {
+    //   stdio: "pipe",
+    // });
 
-    this.neovimClient = attach({
-      proc: this.nvimProcess,
-      options: {
-        logger: createNvimLogger(Boolean(options.logRpc)),
-      },
-    });
-
-    this.neovimClient.on("notification", (method: string, args: unknown[]) => {
-      if (method === "redraw") {
-        this.applyRedrawEvents(args);
-      }
-    });
+    // this.neovimClient = attach({
+    //   proc: this.nvimProcess,
+    //   options: {
+    //     logger: createNvimLogger(Boolean(options.logRpc)),
+    //   },
+    // });
+    //
+    // this.neovimClient.on("notification", (method: string, args: unknown[]) => {
+    //   if (method === "redraw") {
+    //     this.applyRedrawEvents(args);
+    //   }
+    // });
 
     this.bootPromise = this.bootstrap();
     void this.bootPromise.catch((error: unknown) => {
@@ -981,7 +982,7 @@ export class NvimRenderable extends BoxRenderable {
               this.ctx.setCursorPosition(x + 1, y + 1, true);
 
               const cursorStyle = this.getCursorStyleForMode();
-              this.ctx.setCursorStyle(cursorStyle, false);
+              this.ctx.setCursorStyle(cursorStyle.style, cursorStyle.blinking);
             } else {
               this.ctx.setCursorPosition(1, 1, false);
             }
@@ -1065,7 +1066,7 @@ export class NvimRenderable extends BoxRenderable {
               this.currentVimMode = modeName;
             }
             const cursorStyle = this.getCursorStyleForMode();
-            this.ctx.setCursorStyle(cursorStyle, false);
+            this.ctx.setCursorStyle(cursorStyle.style, cursorStyle.blinking);
 
             if (previousMode !== this.currentVimMode) {
               this.options.onModeChange?.({
@@ -1173,34 +1174,39 @@ export class NvimRenderable extends BoxRenderable {
     }
   }
 
-  private getCursorStyleForMode(): CursorShape {
+  private getCursorStyleForMode(): CursorStyle {
     const modeInfo = this.modeInfo.find((m) => m.name === this.currentVimMode);
+    const blinking =
+      modeInfo !== undefined &&
+      (modeInfo.blinkon ?? 0) > 0 &&
+      (modeInfo.blinkoff ?? 0) > 0;
+
     if (modeInfo?.cursor_shape) {
       switch (modeInfo.cursor_shape) {
         case "vertical":
-          return "line";
+          return { style: "line", blinking };
         case "horizontal":
-          return "underline";
+          return { style: "underline", blinking };
         case "block":
         default:
-          return "block";
+          return { style: "block", blinking };
       }
     }
 
     switch (this.currentVimMode) {
       case "insert":
       case "cmdline_insert":
-        return "line";
+        return { style: "line", blinking: false };
       case "replace":
       case "cmdline_replace":
-        return "underline";
+        return { style: "underline", blinking: false };
       case "normal":
       case "visual":
       case "visual_select":
       case "cmdline_normal":
       case "operator":
       default:
-        return "block";
+        return { style: "block", blinking: false };
     }
   }
 
