@@ -1,11 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { RGBA } from "@opentui/core";
-import type {
-  TuiHostSlotMap,
-  TuiPluginApi,
-  TuiThemeCurrent,
-} from "@opencode-ai/plugin/tui";
+import type { TuiPluginApi, TuiThemeCurrent } from "@opencode-ai/plugin/tui";
 import { Match, Switch, type JSX } from "solid-js";
 
 export const EmptyBorder = {
@@ -56,6 +52,11 @@ export type DefaultPromptStatus =
       interrupting?: boolean;
     };
 
+export type DefaultPromptActiveStatus = Exclude<
+  DefaultPromptStatus,
+  { type: "idle" }
+>;
+
 export type DefaultPromptUsage = {
   context?: string;
   cost?: string;
@@ -64,8 +65,11 @@ export type DefaultPromptUsage = {
 export type DefaultPromptChromeProps = {
   theme: TuiThemeCurrent;
   input: JSX.Element;
+  onInputMouseDown?: () => void;
+  modeLabelRef?: (value: unknown) => void;
   visible?: boolean;
   mode?: DefaultPromptMode;
+  modeLabel?: string;
   right?: JSX.Element;
   hint?: JSX.Element;
   status?: DefaultPromptStatus;
@@ -83,11 +87,73 @@ export type DefaultPromptChromeProps = {
 
 export type DefaultHomePromptMirrorProps = Omit<
   DefaultPromptChromeProps,
-  "theme" | "right"
+  | "theme"
+  | "right"
+  | "agentName"
+  | "agentColor"
+  | "modelName"
+  | "providerName"
+  | "variant"
 > & {
   api: TuiPluginApi;
-  slotProps: TuiHostSlotMap["home_prompt"];
-  right?: JSX.Element;
+  children?: JSX.Element;
+};
+
+export type DefaultPromptRootProps = {
+  visible?: boolean;
+  children: JSX.Element;
+};
+
+export type DefaultPromptFrameProps = {
+  theme: TuiThemeCurrent;
+  borderColor: RGBA;
+  input: JSX.Element;
+  onInputMouseDown?: () => void;
+  children: JSX.Element;
+};
+
+export type DefaultPromptMetaProps = Pick<
+  DefaultPromptChromeProps,
+  | "theme"
+  | "mode"
+  | "modeLabel"
+  | "modeLabelRef"
+  | "right"
+  | "agentName"
+  | "modelName"
+  | "providerName"
+  | "variant"
+  | "leader"
+> & {
+  highlight: RGBA;
+};
+
+export type DefaultPromptFooterSpacerProps = {
+  theme: TuiThemeCurrent;
+  borderColor: RGBA;
+};
+
+export type DefaultPromptFooterProps = Pick<
+  DefaultPromptChromeProps,
+  | "theme"
+  | "mode"
+  | "hint"
+  | "status"
+  | "usage"
+  | "agentsKeyHint"
+  | "commandsKeyHint"
+  | "shellExitKeyHint"
+>;
+
+export type DefaultPromptKeyHintProps = {
+  theme: TuiThemeCurrent;
+  hint: string;
+  label: string;
+};
+
+export type DefaultPromptModel = {
+  modelID: string;
+  providerID: string;
 };
 
 export function getDefaultHomePromptPlaceholder(
@@ -112,6 +178,78 @@ export function renderDefaultHomePromptRight(
     name: "home_prompt_right",
     workspace_id,
   });
+}
+
+export function DefaultHomePromptRight(props: {
+  api: TuiPluginApi;
+  workspace_id?: string;
+}) {
+  return renderDefaultHomePromptRight(props.api, props.workspace_id);
+}
+
+function parseModel(value?: string) {
+  if (!value) return;
+
+  const [providerID, ...rest] = value.split("/");
+  if (!providerID || rest.length === 0) return;
+  return {
+    modelID: rest.join("/"),
+    providerID,
+  } satisfies DefaultPromptModel;
+}
+
+function resolveConfiguredModel(api: TuiPluginApi) {
+  const configured = parseModel(api.state.config.model);
+  if (configured) return configured;
+
+  for (const provider of api.state.provider) {
+    const modelID = Object.keys(provider.models)[0];
+    if (!modelID) continue;
+    return {
+      modelID,
+      providerID: provider.id,
+    } satisfies DefaultPromptModel;
+  }
+}
+
+function resolveAgentColor(api: TuiPluginApi, agentName: string) {
+  const configured = api.state.config.agent?.[agentName]?.color;
+  if (typeof configured !== "string") return api.theme.current.primary;
+  if (configured.startsWith("#")) {
+    try {
+      return RGBA.fromHex(configured);
+    } catch {
+      return api.theme.current.primary;
+    }
+  }
+
+  const value = api.theme.current[configured as keyof typeof api.theme.current];
+  return value instanceof RGBA ? value : api.theme.current.primary;
+}
+
+function resolveAgentName(api: TuiPluginApi) {
+  return api.state.config.default_agent ?? "build";
+}
+
+function resolveAgentVariant(api: TuiPluginApi, agentName: string) {
+  const variant = api.state.config.agent?.[agentName]?.variant;
+  return typeof variant === "string" ? variant : undefined;
+}
+
+function resolveModelMeta(api: TuiPluginApi) {
+  const configuredModel = resolveConfiguredModel(api);
+  const provider = configuredModel
+    ? api.state.provider.find((item) => item.id === configuredModel.providerID)
+    : undefined;
+  const model =
+    configuredModel && provider
+      ? provider.models[configuredModel.modelID]
+      : undefined;
+
+  return {
+    modelName: model?.name ?? configuredModel?.modelID,
+    providerName: provider?.name ?? configuredModel?.providerID,
+  };
 }
 
 function fadeColor(color: RGBA, alpha: number) {
@@ -139,11 +277,245 @@ function statusText(status: DefaultPromptStatus) {
   return undefined;
 }
 
-function renderKeyHint(theme: TuiThemeCurrent, hint: string, label: string) {
+export function DefaultPromptRoot(props: DefaultPromptRootProps) {
+  return <box visible={props.visible !== false}>{props.children}</box>;
+}
+
+export function DefaultPromptKeyHint(props: DefaultPromptKeyHintProps) {
   return (
-    <text fg={theme.text}>
-      {hint} <span style={{ fg: theme.textMuted }}>{label}</span>
+    <text fg={props.theme.text}>
+      {props.hint}{" "}
+      <span style={{ fg: props.theme.textMuted }}>{props.label}</span>
     </text>
+  );
+}
+
+export function DefaultPromptFrame(props: DefaultPromptFrameProps) {
+  return (
+    <box
+      border={["left"]}
+      borderColor={props.borderColor}
+      customBorderChars={{ ...SplitBorder.customBorderChars, bottomLeft: "╹" }}
+    >
+      <box
+        paddingLeft={2}
+        paddingRight={2}
+        paddingTop={1}
+        flexShrink={0}
+        backgroundColor={props.theme.backgroundElement}
+        flexGrow={1}
+      >
+        <box onMouseDown={() => props.onInputMouseDown?.()}>{props.input}</box>
+        {props.children}
+      </box>
+    </box>
+  );
+}
+
+export function DefaultPromptMeta(props: DefaultPromptMetaProps) {
+  const theme = props.theme;
+  const mode = props.mode ?? "normal";
+  const showAgentMeta =
+    Boolean(props.modeLabel) || mode === "shell" || Boolean(props.agentName);
+
+  return (
+    <box
+      flexDirection="row"
+      flexShrink={0}
+      paddingTop={1}
+      gap={1}
+      justifyContent="space-between"
+    >
+      <box flexDirection="row" gap={1}>
+        {showAgentMeta ? (
+          <>
+            {props.modeLabel ? (
+              <>
+                <text
+                  ref={props.modeLabelRef}
+                  fg={fadeColor(theme.textMuted, 1)}
+                >
+                  {props.modeLabel}
+                </text>
+                <text fg={fadeColor(theme.textMuted, 1)}>·</text>
+              </>
+            ) : null}
+            <text fg={fadeColor(props.highlight, 1)}>
+              {mode === "shell" ? "Shell" : titlecase(props.agentName ?? "")}
+            </text>
+            {mode === "normal" ? <DefaultPromptModelMeta {...props} /> : null}
+          </>
+        ) : (
+          <box height={1} />
+        )}
+      </box>
+      {props.right ? (
+        <box flexDirection="row" gap={1} alignItems="center">
+          {props.right}
+        </box>
+      ) : null}
+    </box>
+  );
+}
+
+export function DefaultPromptModelMeta(props: DefaultPromptMetaProps) {
+  const theme = props.theme;
+
+  return (
+    <box flexDirection="row" gap={1}>
+      {props.modelName ? (
+        <>
+          <text fg={fadeColor(theme.textMuted, 1)}>·</text>
+          <text
+            flexShrink={0}
+            fg={fadeColor(props.leader ? theme.textMuted : theme.text, 1)}
+          >
+            {props.modelName}
+          </text>
+        </>
+      ) : null}
+      {props.providerName ? (
+        <text fg={fadeColor(theme.textMuted, 1)}>{props.providerName}</text>
+      ) : null}
+      {props.variant ? (
+        <>
+          <text fg={fadeColor(theme.textMuted, 1)}>·</text>
+          <text>
+            <span style={{ fg: fadeColor(theme.warning, 1), bold: true }}>
+              {props.variant}
+            </span>
+          </text>
+        </>
+      ) : null}
+    </box>
+  );
+}
+
+export function DefaultPromptFooterSpacer(
+  props: DefaultPromptFooterSpacerProps,
+) {
+  return (
+    <box
+      height={1}
+      border={["left"]}
+      borderColor={props.borderColor}
+      customBorderChars={{
+        ...EmptyBorder,
+        vertical: props.theme.backgroundElement.a !== 0 ? "╹" : " ",
+      }}
+    >
+      <box
+        height={1}
+        border={["bottom"]}
+        borderColor={props.theme.backgroundElement}
+        customBorderChars={
+          props.theme.backgroundElement.a !== 0
+            ? { ...EmptyBorder, horizontal: "▀" }
+            : { ...EmptyBorder, horizontal: " " }
+        }
+      />
+    </box>
+  );
+}
+
+export function DefaultPromptFooter(props: DefaultPromptFooterProps) {
+  const theme = props.theme;
+  const mode = props.mode ?? "normal";
+  const status = props.status ?? { type: "idle" as const };
+  const usageText = [props.usage?.context, props.usage?.cost]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
+
+  return (
+    <box width="100%" flexDirection="row" justifyContent="space-between">
+      {status.type !== "idle" ? (
+        <DefaultPromptStatus theme={theme} status={status} />
+      ) : (
+        (props.hint ?? <text />)
+      )}
+      {status.type !== "retry" ? (
+        <box gap={2} flexDirection="row">
+          <Switch>
+            <Match when={mode === "normal"}>
+              {usageText ? (
+                <text fg={theme.textMuted} wrapMode="none">
+                  {usageText}
+                </text>
+              ) : (
+                <DefaultPromptKeyHint
+                  theme={theme}
+                  hint={props.agentsKeyHint ?? "tab"}
+                  label="agents"
+                />
+              )}
+              <DefaultPromptKeyHint
+                theme={theme}
+                hint={props.commandsKeyHint ?? "/"}
+                label="commands"
+              />
+            </Match>
+            <Match when={mode === "shell"}>
+              <DefaultPromptKeyHint
+                theme={theme}
+                hint={props.shellExitKeyHint ?? "esc"}
+                label="exit shell mode"
+              />
+            </Match>
+          </Switch>
+        </box>
+      ) : null}
+    </box>
+  );
+}
+
+export function DefaultPromptStatus(props: {
+  theme: TuiThemeCurrent;
+  status: DefaultPromptActiveStatus;
+}) {
+  const busyText = statusText(props.status);
+
+  return (
+    <box
+      flexDirection="row"
+      gap={1}
+      flexGrow={1}
+      justifyContent={
+        props.status.type === "retry" ? "space-between" : "flex-start"
+      }
+    >
+      <box flexShrink={0} flexDirection="row" gap={1}>
+        <box marginLeft={1}>
+          <text fg={props.theme.textMuted}>[⋯]</text>
+        </box>
+        <box flexDirection="row" gap={1} flexShrink={0}>
+          {busyText ? (
+            <text
+              fg={
+                props.status.type === "retry"
+                  ? props.theme.error
+                  : props.theme.textMuted
+              }
+            >
+              {busyText}
+            </text>
+          ) : null}
+        </box>
+      </box>
+      <text
+        fg={props.status.interrupting ? props.theme.primary : props.theme.text}
+      >
+        esc{" "}
+        <span
+          style={{
+            fg: props.status.interrupting
+              ? props.theme.primary
+              : props.theme.textMuted,
+          }}
+        >
+          {props.status.interrupting ? "again to interrupt" : "interrupt"}
+        </span>
+      </text>
+    </box>
   );
 }
 
@@ -151,215 +523,53 @@ function renderKeyHint(theme: TuiThemeCurrent, hint: string, label: string) {
 export function DefaultPromptChrome(props: DefaultPromptChromeProps) {
   const theme = props.theme;
   const mode = props.mode ?? "normal";
-  const status = props.status ?? { type: "idle" as const };
-  const showAgentMeta = mode === "shell" || Boolean(props.agentName);
+  const showAgentMeta =
+    Boolean(props.modeLabel) || mode === "shell" || Boolean(props.agentName);
   const highlight = props.leader
     ? theme.border
     : mode === "shell"
       ? theme.primary
       : (props.agentColor ?? theme.border);
   const borderHighlight = tint(theme.border, highlight, showAgentMeta ? 1 : 0);
-  const usageText = [props.usage?.context, props.usage?.cost]
-    .filter((value): value is string => Boolean(value))
-    .join(" · ");
-  const busyText = statusText(status);
 
   return (
-    <box visible={props.visible !== false}>
-      <box
-        border={["left"]}
+    <DefaultPromptRoot visible={props.visible}>
+      <DefaultPromptFrame
+        theme={theme}
         borderColor={borderHighlight}
-        customBorderChars={{
-          ...SplitBorder.customBorderChars,
-          bottomLeft: "╹",
-        }}
+        input={props.input}
+        onInputMouseDown={props.onInputMouseDown}
       >
-        <box
-          paddingLeft={2}
-          paddingRight={2}
-          paddingTop={1}
-          flexShrink={0}
-          backgroundColor={theme.backgroundElement}
-          flexGrow={1}
-        >
-          {props.input}
-          <box
-            flexDirection="row"
-            flexShrink={0}
-            paddingTop={1}
-            gap={1}
-            justifyContent="space-between"
-          >
-            <box flexDirection="row" gap={1}>
-              {showAgentMeta ? (
-                <>
-                  <text fg={fadeColor(theme.primary, 1)}>
-                    {mode === "shell"
-                      ? "Shell"
-                      : titlecase(props.agentName ?? "")}
-                  </text>
-                  {mode === "normal" ? (
-                    <box flexDirection="row" gap={1}>
-                      {props.modelName ? (
-                        <>
-                          <text
-														marginLeft={1}
-                            flexShrink={0}
-                            fg={fadeColor(
-                              props.leader ? theme.textMuted : theme.text,
-                              1,
-                            )}
-                          >
-                            {props.modelName}
-                          </text>
-                        </>
-                      ) : null}
-                      {props.providerName ? (
-                        <text fg={fadeColor(theme.textMuted, 1)}>
-                          {props.providerName}
-                        </text>
-                      ) : null}
-                      {props.variant ? (
-                        <>
-                          <text fg={fadeColor(theme.textMuted, 1)}>·</text>
-                          <text>
-                            <span
-                              style={{
-                                fg: fadeColor(theme.warning, 1),
-                                bold: true,
-                              }}
-                            >
-                              {props.variant}
-                            </span>
-                          </text>
-                        </>
-                      ) : null}
-                    </box>
-                  ) : null}
-                </>
-              ) : (
-                <box height={1} />
-              )}
-            </box>
-            {props.right ? (
-              <box flexDirection="row" gap={1} alignItems="center">
-                {props.right}
-              </box>
-            ) : null}
-          </box>
-        </box>
-      </box>
-      <box
-        height={1}
-        border={["left"]}
-        borderColor={borderHighlight}
-        customBorderChars={{
-          ...EmptyBorder,
-          vertical: theme.backgroundElement.a !== 0 ? "╹" : " ",
-        }}
-      >
-        <box
-          height={1}
-          border={["bottom"]}
-          borderColor={theme.backgroundElement}
-          customBorderChars={
-            theme.backgroundElement.a !== 0
-              ? {
-                  ...EmptyBorder,
-                  horizontal: "▀",
-                }
-              : {
-                  ...EmptyBorder,
-                  horizontal: " ",
-                }
-          }
-        />
-      </box>
-      <box width="100%" flexDirection="row" justifyContent="space-between">
-        {status.type !== "idle" ? (
-          <box
-            flexDirection="row"
-            gap={1}
-            flexGrow={1}
-            justifyContent={
-              status.type === "retry" ? "space-between" : "flex-start"
-            }
-          >
-            <box flexShrink={0} flexDirection="row" gap={1}>
-              <box marginLeft={1}>
-                <text fg={theme.textMuted}>[⋯]</text>
-              </box>
-              <box flexDirection="row" gap={1} flexShrink={0}>
-                {busyText ? (
-                  <text
-                    fg={status.type === "retry" ? theme.error : theme.textMuted}
-                  >
-                    {busyText}
-                  </text>
-                ) : null}
-              </box>
-            </box>
-            <text fg={status.interrupting ? theme.primary : theme.text}>
-              esc{" "}
-              <span
-                style={{
-                  fg: status.interrupting ? theme.primary : theme.textMuted,
-                }}
-              >
-                {status.interrupting ? "again to interrupt" : "interrupt"}
-              </span>
-            </text>
-          </box>
-        ) : (
-          (props.hint ?? <text />)
-        )}
-        {status.type !== "retry" ? (
-          <box gap={2} flexDirection="row">
-            <Switch>
-              <Match when={mode === "normal"}>
-                {usageText ? (
-                  <text fg={theme.textMuted} wrapMode="none">
-                    {usageText}
-                  </text>
-                ) : (
-                  renderKeyHint(theme, props.agentsKeyHint ?? "tab", "agents")
-                )}
-                {renderKeyHint(theme, props.commandsKeyHint ?? "/", "commands")}
-              </Match>
-              <Match when={mode === "shell"}>
-                {renderKeyHint(
-                  theme,
-                  props.shellExitKeyHint ?? "esc",
-                  "exit shell mode",
-                )}
-              </Match>
-            </Switch>
-          </box>
-        ) : null}
-      </box>
-    </box>
+        <DefaultPromptMeta {...props} mode={mode} highlight={highlight} />
+      </DefaultPromptFrame>
+      <DefaultPromptFooterSpacer theme={theme} borderColor={borderHighlight} />
+      <DefaultPromptFooter {...props} mode={mode} />
+    </DefaultPromptRoot>
   );
 }
 
 export function DefaultHomePromptMirror(props: DefaultHomePromptMirrorProps) {
+  const agentName = resolveAgentName(props.api);
+  const modelMeta = resolveModelMeta(props.api);
+
   return (
     <DefaultPromptChrome
       theme={props.api.theme.current}
       input={props.input}
+      onInputMouseDown={props.onInputMouseDown}
+      modeLabelRef={props.modeLabelRef}
       visible={props.visible}
       mode={props.mode}
-      right={
-        props.right ??
-        renderDefaultHomePromptRight(props.api, props.slotProps.workspace_id)
-      }
+      modeLabel={props.modeLabel}
+      right={props.children}
       hint={props.hint}
       status={props.status}
       usage={props.usage}
-      agentName={props.agentName}
-      agentColor={props.agentColor}
-      modelName={props.modelName}
-      providerName={props.providerName}
-      variant={props.variant}
+      agentName={agentName}
+      agentColor={resolveAgentColor(props.api, agentName)}
+      modelName={modelMeta.modelName}
+      providerName={modelMeta.providerName}
+      variant={resolveAgentVariant(props.api, agentName)}
       leader={props.leader}
       agentsKeyHint={props.agentsKeyHint}
       commandsKeyHint={props.commandsKeyHint}

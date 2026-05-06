@@ -41,6 +41,19 @@ export type NvimCompletionItem = {
   data?: unknown;
 };
 
+export type NvimVirtualTextChunk = {
+  text: string;
+  hlGroup?: string;
+  color?: ColorInput;
+};
+
+export type NvimVirtualText = {
+  line?: number;
+  col?: number;
+  position?: "eol" | "overlay" | "right_align" | "inline";
+  chunks: NvimVirtualTextChunk[];
+};
+
 type CursorStyle = CursorStyleOptions;
 
 type CompletionAnchor = {
@@ -51,6 +64,9 @@ type CompletionAnchor = {
 
 export type NvimRenderableOptions = BoxOptions<NvimRenderable> & {
   argv?: string[];
+  hideCmdline?: boolean;
+  hideEndOfBuffer?: boolean;
+  hideStatusline?: boolean;
   logRpc?: boolean;
   value?: string;
   wrapMode?: "none" | "char" | "word";
@@ -174,6 +190,8 @@ export class NvimRenderable extends BoxRenderable {
   private boundBufferId: number | null = null;
   private boundBufferDisposers: Array<() => void> = [];
   private lastKnownChangedtick?: number;
+  private virtualTextNamespaceId?: number;
+  private virtualTextHighlightGroups = new Map<string, string>();
 
   private shownCompletionItems: NvimCompletionItem[] = [];
   private popupmenuVisible = false;
@@ -239,6 +257,46 @@ export class NvimRenderable extends BoxRenderable {
 
   public getMode(): NvimMode {
     return this.currentVimMode;
+  }
+
+  public async setVirtualText(input: NvimVirtualText): Promise<void> {
+    await this.bootPromise;
+    const buffer = this.requireBoundBuffer();
+    const namespaceId = await this.getVirtualTextNamespace();
+
+    buffer.clearNamespace({
+      lineEnd: -1,
+      lineStart: 0,
+      nsId: namespaceId,
+    });
+
+    await this.neovimClient.lua(
+      [
+        "local bufnr, ns, line, col, chunks, position = ...",
+        "return vim.api.nvim_buf_set_extmark(bufnr, ns, line, col, {",
+        "  virt_text = chunks,",
+        "  virt_text_pos = position,",
+        "})",
+      ].join("\n"),
+      [
+        this.boundBufferId ?? 0,
+        namespaceId,
+        Math.max(0, Math.floor(input.line ?? 0)),
+        Math.max(0, Math.floor(input.col ?? 0)),
+        await this.normalizeVirtualTextChunks(input.chunks),
+        input.position ?? "eol",
+      ],
+    );
+  }
+
+  public async clearVirtualText(): Promise<void> {
+    await this.bootPromise;
+    const buffer = this.requireBoundBuffer();
+    buffer.clearNamespace({
+      lineEnd: -1,
+      lineStart: 0,
+      nsId: await this.getVirtualTextNamespace(),
+    });
   }
 
   public async showCompletion(
@@ -506,6 +564,18 @@ export class NvimRenderable extends BoxRenderable {
   private async applyEditorOptions() {
     const commands: string[] = [];
 
+    if (this.options.hideCmdline) {
+      commands.push("set cmdheight=0 noshowcmd noruler");
+    }
+
+    if (this.options.hideStatusline) {
+      commands.push("set laststatus=0");
+    }
+
+    if (this.options.hideEndOfBuffer) {
+      commands.push("setlocal fillchars+=eob:\\ ");
+    }
+
     switch (this.options.wrapMode) {
       case "none":
         commands.push("setlocal nowrap nolinebreak");
@@ -633,13 +703,29 @@ export class NvimRenderable extends BoxRenderable {
 
       try {
         const window = await this.neovimClient.window;
-        const [line, col] = await window.cursor;
+        const [[line, col], mode] = await Promise.all([
+          window.cursor,
+          this.neovimClient.mode.catch(() => undefined),
+        ]);
+        const previousMode = this.currentVimMode;
+        if (mode && typeof mode.mode === "string") {
+          this.currentVimMode = mode.mode;
+        }
         this.lastKnownCursor = {
           line: Math.max(0, line - 1),
           col: Math.max(0, col),
           row: pending.row,
           grid: pending.grid,
         };
+        if (previousMode !== this.currentVimMode) {
+          const cursorStyle = this.getCursorStyleForMode();
+          this.ctx.setCursorStyle(cursorStyle.style, cursorStyle.blinking);
+          this.options.onModeChange?.({
+            mode: this.currentVimMode,
+            previousMode,
+            cursorShape: cursorStyle,
+          });
+        }
         this.options.onCursorChange?.({
           cursor: this.getCursorSnapshot(),
           mode: this.currentVimMode,
@@ -734,6 +820,40 @@ export class NvimRenderable extends BoxRenderable {
       info: fallback?.info,
       data: fallback?.data,
     };
+  }
+
+  private async getVirtualTextNamespace() {
+    if (typeof this.virtualTextNamespaceId === "number") {
+      return this.virtualTextNamespaceId;
+    }
+
+    this.virtualTextNamespaceId = await this.neovimClient.createNamespace(
+      "opentui-nvim-virtual-text",
+    );
+    return this.virtualTextNamespaceId;
+  }
+
+  private async normalizeVirtualTextChunks(chunks: NvimVirtualTextChunk[]) {
+    return await Promise.all(
+      chunks.map(async (chunk) => {
+        const highlight =
+          chunk.hlGroup ?? (await this.getVirtualTextHighlight(chunk.color));
+        return highlight ? [chunk.text, highlight] : [chunk.text];
+      }),
+    );
+  }
+
+  private async getVirtualTextHighlight(color?: ColorInput) {
+    const hex = toNvimHex(color);
+    if (!hex) return undefined;
+
+    const existing = this.virtualTextHighlightGroups.get(hex);
+    if (existing) return existing;
+
+    const group = `OpenTuiVirtualText${hex.replace(/[^a-zA-Z0-9]/g, "")}`;
+    await this.neovimClient.command(`highlight ${group} guifg=${hex}`);
+    this.virtualTextHighlightGroups.set(hex, group);
+    return group;
   }
 
   private getCompletionItem(index: number): NvimCompletionItem | null {

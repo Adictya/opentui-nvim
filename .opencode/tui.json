@@ -1,4 +1,4 @@
 {
   "$schema": "https://opencode.ai/tui.json",
-	"plugin": ["../dist/plugin-entry.js"]
+  "plugin": ["../dist/plugin-entry.js"]
 }

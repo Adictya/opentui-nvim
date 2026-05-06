@@ -5,6 +5,9 @@ import { spawn } from "node:child_process";
 
 type HarnessOptions = {
   argv?: string[];
+  hideCmdline?: boolean;
+  hideEndOfBuffer?: boolean;
+  hideStatusline?: boolean;
   logRpc?: boolean;
   value?: string;
   wrapMode?: "none" | "char" | "word";
@@ -707,6 +710,42 @@ test("covers NvimRenderable API surface with pilotty", async () => {
     );
     expect(boundId).toBeGreaterThan(0);
   });
+
+  await withHarness(
+    {
+      hideCmdline: true,
+      hideEndOfBuffer: true,
+      hideStatusline: true,
+    },
+    async (session) => {
+      await sendHarnessCommand(session, "focus");
+
+      const startIndex = readEvents(session).length;
+      await sendKey(session, "i");
+      await waitForEvent(
+        session,
+        (event) => event.type === "mode_change" && event.mode === "insert",
+        {
+          startIndex,
+          timeoutMs: 10_000,
+          label: "insert mode event with prompt chrome options",
+        },
+      );
+
+      await sendText(session, "alpha");
+      await Bun.sleep(400);
+
+      const events = readEvents(session).slice(startIndex);
+      const modeEvents = events.filter((event) => event.type === "mode_change");
+      const cursorEvents = events.filter(
+        (event) => event.type === "cursor_change",
+      );
+
+      expect(modeEvents.length).toBeGreaterThan(0);
+      expect(modeEvents.some((event) => event.mode === "insert")).toBe(true);
+      expect(cursorEvents.length).toBeGreaterThan(0);
+    },
+  );
 
   await withHarness(
     {

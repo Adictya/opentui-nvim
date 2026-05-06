@@ -15272,16 +15272,8 @@ var require_winston2 = __commonJS((exports) => {
   warn.forProperties(exports, "deprecated", ["emitErrs", "levelLength"]);
 });
 
-// default-prompt.tsx
-import { createComponent as _$createComponent } from "@opentui/solid";
-import { memo as _$memo } from "@opentui/solid";
-import { setProp as _$setProp } from "@opentui/solid";
-import { effect as _$effect } from "@opentui/solid";
-import { createTextNode as _$createTextNode } from "@opentui/solid";
-import { insertNode as _$insertNode } from "@opentui/solid";
-import { insert as _$insert } from "@opentui/solid";
-import { createElement as _$createElement } from "@opentui/solid";
-import { RGBA } from "@opentui/core";
+// plugin-entry.tsx
+import { createComponent as _$createComponent2 } from "@opentui/solid";
 
 // node_modules/solid-js/dist/server.js
 var IS_DEV = false;
@@ -15877,6 +15869,17 @@ function Match(props) {
 }
 
 // default-prompt.tsx
+import { mergeProps as _$mergeProps } from "@opentui/solid";
+import { createComponent as _$createComponent } from "@opentui/solid";
+import { use as _$use } from "@opentui/solid";
+import { memo as _$memo } from "@opentui/solid";
+import { createTextNode as _$createTextNode } from "@opentui/solid";
+import { insertNode as _$insertNode } from "@opentui/solid";
+import { setProp as _$setProp } from "@opentui/solid";
+import { effect as _$effect } from "@opentui/solid";
+import { insert as _$insert } from "@opentui/solid";
+import { createElement as _$createElement } from "@opentui/solid";
+import { RGBA } from "@opentui/core";
 var EmptyBorder = {
   topLeft: "",
   bottomLeft: "",
@@ -15897,11 +15900,82 @@ var SplitBorder = {
     vertical: "\u2503"
   }
 };
+var defaultHomePromptPlaceholders = {
+  normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
+  shell: ["ls -la", "git status", "pwd"]
+};
+function getDefaultHomePromptPlaceholder(mode, index = 0) {
+  const list = mode === "shell" ? defaultHomePromptPlaceholders.shell : defaultHomePromptPlaceholders.normal;
+  if (list.length === 0)
+    return;
+  const value = list[(index % list.length + list.length) % list.length];
+  if (mode === "shell")
+    return `Run a command... "${value}"`;
+  return `Ask anything... "${value}"`;
+}
 function renderDefaultHomePromptRight(api, workspace_id) {
   return api.ui.Slot({
     name: "home_prompt_right",
     workspace_id
   });
+}
+function DefaultHomePromptRight(props) {
+  return renderDefaultHomePromptRight(props.api, props.workspace_id);
+}
+function parseModel(value) {
+  if (!value)
+    return;
+  const [providerID, ...rest] = value.split("/");
+  if (!providerID || rest.length === 0)
+    return;
+  return {
+    modelID: rest.join("/"),
+    providerID
+  };
+}
+function resolveConfiguredModel(api) {
+  const configured = parseModel(api.state.config.model);
+  if (configured)
+    return configured;
+  for (const provider of api.state.provider) {
+    const modelID = Object.keys(provider.models)[0];
+    if (!modelID)
+      continue;
+    return {
+      modelID,
+      providerID: provider.id
+    };
+  }
+}
+function resolveAgentColor(api, agentName) {
+  const configured = api.state.config.agent?.[agentName]?.color;
+  if (typeof configured !== "string")
+    return api.theme.current.primary;
+  if (configured.startsWith("#")) {
+    try {
+      return RGBA.fromHex(configured);
+    } catch {
+      return api.theme.current.primary;
+    }
+  }
+  const value = api.theme.current[configured];
+  return value instanceof RGBA ? value : api.theme.current.primary;
+}
+function resolveAgentName(api) {
+  return api.state.config.default_agent ?? "build";
+}
+function resolveAgentVariant(api, agentName) {
+  const variant = api.state.config.agent?.[agentName]?.variant;
+  return typeof variant === "string" ? variant : undefined;
+}
+function resolveModelMeta(api) {
+  const configuredModel = resolveConfiguredModel(api);
+  const provider = configuredModel ? api.state.provider.find((item) => item.id === configuredModel.providerID) : undefined;
+  const model = configuredModel && provider ? provider.models[configuredModel.modelID] : undefined;
+  return {
+    modelName: model?.name ?? configuredModel?.modelID,
+    providerName: provider?.name ?? configuredModel?.providerID
+  };
 }
 function fadeColor(color, alpha) {
   return RGBA.fromValues(color.r, color.g, color.b, color.a * alpha);
@@ -15922,244 +15996,355 @@ function statusText(status) {
     return status.message ?? "Working...";
   return;
 }
-function renderKeyHint(theme, hint, label) {
+function DefaultPromptRoot(props) {
   return (() => {
-    var _el$ = _$createElement("text"), _el$2 = _$createTextNode(` `), _el$3 = _$createElement("span");
-    _$insertNode(_el$, _el$2);
-    _$insertNode(_el$, _el$3);
-    _$insert(_el$, hint, _el$2);
-    _$insert(_el$3, label);
+    var _el$ = _$createElement("box");
+    _$insert(_el$, () => props.children);
+    _$effect((_$p) => _$setProp(_el$, "visible", props.visible !== false, _$p));
+    return _el$;
+  })();
+}
+function DefaultPromptKeyHint(props) {
+  return (() => {
+    var _el$2 = _$createElement("text"), _el$3 = _$createTextNode(` `), _el$4 = _$createElement("span");
+    _$insertNode(_el$2, _el$3);
+    _$insertNode(_el$2, _el$4);
+    _$insert(_el$2, () => props.hint, _el$3);
+    _$insert(_el$4, () => props.label);
     _$effect((_p$) => {
-      var _v$ = theme.text, _v$2 = {
-        fg: theme.textMuted
+      var _v$ = props.theme.text, _v$2 = {
+        fg: props.theme.textMuted
       };
-      _v$ !== _p$.e && (_p$.e = _$setProp(_el$, "fg", _v$, _p$.e));
-      _v$2 !== _p$.t && (_p$.t = _$setProp(_el$3, "style", _v$2, _p$.t));
+      _v$ !== _p$.e && (_p$.e = _$setProp(_el$2, "fg", _v$, _p$.e));
+      _v$2 !== _p$.t && (_p$.t = _$setProp(_el$4, "style", _v$2, _p$.t));
       return _p$;
     }, {
       e: undefined,
       t: undefined
     });
-    return _el$;
+    return _el$2;
   })();
 }
-function DefaultPromptChrome(props) {
-  const theme = props.theme;
-  const mode = props.mode ?? "normal";
-  const status = props.status ?? {
-    type: "idle"
-  };
-  const showAgentMeta = mode === "shell" || Boolean(props.agentName);
-  const highlight = props.leader ? theme.border : mode === "shell" ? theme.primary : props.agentColor ?? theme.border;
-  const borderHighlight = tint(theme.border, highlight, showAgentMeta ? 1 : 0);
-  const usageText = [props.usage?.context, props.usage?.cost].filter((value) => Boolean(value)).join(" \xB7 ");
-  const busyText = statusText(status);
+function DefaultPromptFrame(props) {
   return (() => {
-    var _el$4 = _$createElement("box"), _el$5 = _$createElement("box"), _el$6 = _$createElement("box"), _el$7 = _$createElement("box"), _el$8 = _$createElement("box"), _el$9 = _$createElement("box"), _el$0 = _$createElement("box"), _el$1 = _$createElement("box");
-    _$insertNode(_el$4, _el$5);
-    _$insertNode(_el$4, _el$9);
-    _$insertNode(_el$4, _el$1);
+    var _el$5 = _$createElement("box"), _el$6 = _$createElement("box"), _el$7 = _$createElement("box");
     _$insertNode(_el$5, _el$6);
     _$setProp(_el$5, "border", ["left"]);
-    _$setProp(_el$5, "borderColor", borderHighlight);
     _$insertNode(_el$6, _el$7);
     _$setProp(_el$6, "paddingLeft", 2);
     _$setProp(_el$6, "paddingRight", 2);
     _$setProp(_el$6, "paddingTop", 1);
     _$setProp(_el$6, "flexShrink", 0);
     _$setProp(_el$6, "flexGrow", 1);
-    _$insert(_el$6, () => props.input, _el$7);
-    _$insertNode(_el$7, _el$8);
-    _$setProp(_el$7, "flexDirection", "row");
-    _$setProp(_el$7, "flexShrink", 0);
-    _$setProp(_el$7, "paddingTop", 1);
-    _$setProp(_el$7, "gap", 1);
-    _$setProp(_el$7, "justifyContent", "space-between");
-    _$setProp(_el$8, "flexDirection", "row");
-    _$setProp(_el$8, "gap", 1);
-    _$insert(_el$8, showAgentMeta ? [(() => {
-      var _el$10 = _$createElement("text");
-      _$insert(_el$10, () => mode === "shell" ? "Shell" : titlecase(props.agentName ?? ""));
-      _$effect((_$p) => _$setProp(_el$10, "fg", fadeColor(theme.primary, 1), _$p));
-      return _el$10;
-    })(), mode === "normal" ? (() => {
-      var _el$11 = _$createElement("box");
-      _$setProp(_el$11, "flexDirection", "row");
-      _$setProp(_el$11, "gap", 1);
-      _$insert(_el$11, (() => {
-        var _c$4 = _$memo(() => !!props.modelName);
-        return () => _c$4() ? (() => {
-          var _el$12 = _$createElement("text");
-          _$setProp(_el$12, "marginLeft", 1);
-          _$setProp(_el$12, "flexShrink", 0);
-          _$insert(_el$12, () => props.modelName);
-          _$effect((_$p) => _$setProp(_el$12, "fg", fadeColor(props.leader ? theme.textMuted : theme.text, 1), _$p));
-          return _el$12;
-        })() : null;
-      })(), null);
-      _$insert(_el$11, (() => {
-        var _c$5 = _$memo(() => !!props.providerName);
-        return () => _c$5() ? (() => {
-          var _el$13 = _$createElement("text");
-          _$insert(_el$13, () => props.providerName);
-          _$effect((_$p) => _$setProp(_el$13, "fg", fadeColor(theme.textMuted, 1), _$p));
-          return _el$13;
-        })() : null;
-      })(), null);
-      _$insert(_el$11, (() => {
-        var _c$6 = _$memo(() => !!props.variant);
-        return () => _c$6() ? [(() => {
-          var _el$14 = _$createElement("text");
-          _$insertNode(_el$14, _$createTextNode(`\xB7`));
-          _$effect((_$p) => _$setProp(_el$14, "fg", fadeColor(theme.textMuted, 1), _$p));
-          return _el$14;
-        })(), (() => {
-          var _el$16 = _$createElement("text"), _el$17 = _$createElement("span");
-          _$insertNode(_el$16, _el$17);
-          _$insert(_el$17, () => props.variant);
-          _$effect((_$p) => _$setProp(_el$17, "style", {
-            fg: fadeColor(theme.warning, 1),
-            bold: true
-          }, _$p));
-          return _el$16;
-        })()] : null;
-      })(), null);
-      return _el$11;
-    })() : null] : (() => {
-      var _el$18 = _$createElement("box");
-      _$setProp(_el$18, "height", 1);
-      return _el$18;
-    })());
-    _$insert(_el$7, (() => {
-      var _c$ = _$memo(() => !!props.right);
-      return () => _c$() ? (() => {
-        var _el$19 = _$createElement("box");
-        _$setProp(_el$19, "flexDirection", "row");
-        _$setProp(_el$19, "gap", 1);
-        _$setProp(_el$19, "alignItems", "center");
-        _$insert(_el$19, () => props.right);
-        return _el$19;
-      })() : null;
-    })(), null);
-    _$insertNode(_el$9, _el$0);
-    _$setProp(_el$9, "height", 1);
-    _$setProp(_el$9, "border", ["left"]);
-    _$setProp(_el$9, "borderColor", borderHighlight);
-    _$setProp(_el$0, "height", 1);
-    _$setProp(_el$0, "border", ["bottom"]);
-    _$setProp(_el$1, "width", "100%");
-    _$setProp(_el$1, "flexDirection", "row");
-    _$setProp(_el$1, "justifyContent", "space-between");
-    _$insert(_el$1, (() => {
-      var _c$2 = _$memo(() => status.type !== "idle");
-      return () => _c$2() ? (() => {
-        var _el$20 = _$createElement("box"), _el$21 = _$createElement("box"), _el$22 = _$createElement("box"), _el$23 = _$createElement("text"), _el$25 = _$createElement("box"), _el$26 = _$createElement("text"), _el$27 = _$createTextNode(`esc `), _el$29 = _$createElement("span");
-        _$insertNode(_el$20, _el$21);
-        _$insertNode(_el$20, _el$26);
-        _$setProp(_el$20, "flexDirection", "row");
-        _$setProp(_el$20, "gap", 1);
-        _$setProp(_el$20, "flexGrow", 1);
-        _$insertNode(_el$21, _el$22);
-        _$insertNode(_el$21, _el$25);
-        _$setProp(_el$21, "flexShrink", 0);
-        _$setProp(_el$21, "flexDirection", "row");
-        _$setProp(_el$21, "gap", 1);
-        _$insertNode(_el$22, _el$23);
-        _$setProp(_el$22, "marginLeft", 1);
-        _$insertNode(_el$23, _$createTextNode(`[\u22EF]`));
-        _$setProp(_el$25, "flexDirection", "row");
-        _$setProp(_el$25, "gap", 1);
-        _$setProp(_el$25, "flexShrink", 0);
-        _$insert(_el$25, busyText ? (() => {
-          var _el$30 = _$createElement("text");
-          _$insert(_el$30, busyText);
-          _$effect((_$p) => _$setProp(_el$30, "fg", status.type === "retry" ? theme.error : theme.textMuted, _$p));
-          return _el$30;
-        })() : null);
-        _$insertNode(_el$26, _el$27);
-        _$insertNode(_el$26, _el$29);
-        _$insert(_el$29, () => status.interrupting ? "again to interrupt" : "interrupt");
-        _$effect((_p$) => {
-          var _v$9 = status.type === "retry" ? "space-between" : "flex-start", _v$0 = theme.textMuted, _v$1 = status.interrupting ? theme.primary : theme.text, _v$10 = {
-            fg: status.interrupting ? theme.primary : theme.textMuted
-          };
-          _v$9 !== _p$.e && (_p$.e = _$setProp(_el$20, "justifyContent", _v$9, _p$.e));
-          _v$0 !== _p$.t && (_p$.t = _$setProp(_el$23, "fg", _v$0, _p$.t));
-          _v$1 !== _p$.a && (_p$.a = _$setProp(_el$26, "fg", _v$1, _p$.a));
-          _v$10 !== _p$.o && (_p$.o = _$setProp(_el$29, "style", _v$10, _p$.o));
-          return _p$;
-        }, {
-          e: undefined,
-          t: undefined,
-          a: undefined,
-          o: undefined
-        });
-        return _el$20;
-      })() : props.hint ?? _$createElement("text");
-    })(), null);
-    _$insert(_el$1, (() => {
-      var _c$3 = _$memo(() => status.type !== "retry");
-      return () => _c$3() ? (() => {
-        var _el$32 = _$createElement("box");
-        _$setProp(_el$32, "gap", 2);
-        _$setProp(_el$32, "flexDirection", "row");
-        _$insert(_el$32, _$createComponent(Switch, {
-          get children() {
-            return [_$createComponent(Match, {
-              when: mode === "normal",
-              get children() {
-                return [_$memo(() => usageText ? (() => {
-                  var _el$33 = _$createElement("text");
-                  _$setProp(_el$33, "wrapMode", "none");
-                  _$insert(_el$33, usageText);
-                  _$effect((_$p) => _$setProp(_el$33, "fg", theme.textMuted, _$p));
-                  return _el$33;
-                })() : renderKeyHint(theme, props.agentsKeyHint ?? "tab", "agents")), _$memo(() => renderKeyHint(theme, props.commandsKeyHint ?? "/", "commands"))];
-              }
-            }), _$createComponent(Match, {
-              when: mode === "shell",
-              get children() {
-                return renderKeyHint(theme, props.shellExitKeyHint ?? "esc", "exit shell mode");
-              }
-            })];
-          }
-        }));
-        return _el$32;
-      })() : null;
-    })(), null);
+    _$setProp(_el$7, "onMouseDown", () => props.onInputMouseDown?.());
+    _$insert(_el$7, () => props.input);
+    _$insert(_el$6, () => props.children, null);
     _$effect((_p$) => {
-      var _v$3 = props.visible !== false, _v$4 = {
+      var _v$3 = props.borderColor, _v$4 = {
         ...SplitBorder.customBorderChars,
         bottomLeft: "\u2579"
-      }, _v$5 = theme.backgroundElement, _v$6 = {
+      }, _v$5 = props.theme.backgroundElement;
+      _v$3 !== _p$.e && (_p$.e = _$setProp(_el$5, "borderColor", _v$3, _p$.e));
+      _v$4 !== _p$.t && (_p$.t = _$setProp(_el$5, "customBorderChars", _v$4, _p$.t));
+      _v$5 !== _p$.a && (_p$.a = _$setProp(_el$6, "backgroundColor", _v$5, _p$.a));
+      return _p$;
+    }, {
+      e: undefined,
+      t: undefined,
+      a: undefined
+    });
+    return _el$5;
+  })();
+}
+function DefaultPromptMeta(props) {
+  const theme = props.theme;
+  const mode = props.mode ?? "normal";
+  const showAgentMeta = Boolean(props.modeLabel) || mode === "shell" || Boolean(props.agentName);
+  return (() => {
+    var _el$8 = _$createElement("box"), _el$9 = _$createElement("box");
+    _$insertNode(_el$8, _el$9);
+    _$setProp(_el$8, "flexDirection", "row");
+    _$setProp(_el$8, "flexShrink", 0);
+    _$setProp(_el$8, "paddingTop", 1);
+    _$setProp(_el$8, "gap", 1);
+    _$setProp(_el$8, "justifyContent", "space-between");
+    _$setProp(_el$9, "flexDirection", "row");
+    _$setProp(_el$9, "gap", 1);
+    _$insert(_el$9, showAgentMeta ? [_$memo(() => _$memo(() => !!props.modeLabel)() ? [(() => {
+      var _el$1 = _$createElement("text");
+      var _ref$ = props.modeLabelRef;
+      typeof _ref$ === "function" ? _$use(_ref$, _el$1) : props.modeLabelRef = _el$1;
+      _$insert(_el$1, () => props.modeLabel);
+      _$effect((_$p) => _$setProp(_el$1, "fg", fadeColor(theme.textMuted, 1), _$p));
+      return _el$1;
+    })(), (() => {
+      var _el$10 = _$createElement("text");
+      _$insertNode(_el$10, _$createTextNode(`\xB7`));
+      _$effect((_$p) => _$setProp(_el$10, "fg", fadeColor(theme.textMuted, 1), _$p));
+      return _el$10;
+    })()] : null), (() => {
+      var _el$0 = _$createElement("text");
+      _$insert(_el$0, () => mode === "shell" ? "Shell" : titlecase(props.agentName ?? ""));
+      _$effect((_$p) => _$setProp(_el$0, "fg", fadeColor(props.highlight, 1), _$p));
+      return _el$0;
+    })(), mode === "normal" ? _$createComponent(DefaultPromptModelMeta, props) : null] : (() => {
+      var _el$12 = _$createElement("box");
+      _$setProp(_el$12, "height", 1);
+      return _el$12;
+    })());
+    _$insert(_el$8, (() => {
+      var _c$ = _$memo(() => !!props.right);
+      return () => _c$() ? (() => {
+        var _el$13 = _$createElement("box");
+        _$setProp(_el$13, "flexDirection", "row");
+        _$setProp(_el$13, "gap", 1);
+        _$setProp(_el$13, "alignItems", "center");
+        _$insert(_el$13, () => props.right);
+        return _el$13;
+      })() : null;
+    })(), null);
+    return _el$8;
+  })();
+}
+function DefaultPromptModelMeta(props) {
+  const theme = props.theme;
+  return (() => {
+    var _el$14 = _$createElement("box");
+    _$setProp(_el$14, "flexDirection", "row");
+    _$setProp(_el$14, "gap", 1);
+    _$insert(_el$14, (() => {
+      var _c$2 = _$memo(() => !!props.modelName);
+      return () => _c$2() ? [(() => {
+        var _el$15 = _$createElement("text");
+        _$insertNode(_el$15, _$createTextNode(`\xB7`));
+        _$effect((_$p) => _$setProp(_el$15, "fg", fadeColor(theme.textMuted, 1), _$p));
+        return _el$15;
+      })(), (() => {
+        var _el$17 = _$createElement("text");
+        _$setProp(_el$17, "flexShrink", 0);
+        _$insert(_el$17, () => props.modelName);
+        _$effect((_$p) => _$setProp(_el$17, "fg", fadeColor(props.leader ? theme.textMuted : theme.text, 1), _$p));
+        return _el$17;
+      })()] : null;
+    })(), null);
+    _$insert(_el$14, (() => {
+      var _c$3 = _$memo(() => !!props.providerName);
+      return () => _c$3() ? (() => {
+        var _el$18 = _$createElement("text");
+        _$insert(_el$18, () => props.providerName);
+        _$effect((_$p) => _$setProp(_el$18, "fg", fadeColor(theme.textMuted, 1), _$p));
+        return _el$18;
+      })() : null;
+    })(), null);
+    _$insert(_el$14, (() => {
+      var _c$4 = _$memo(() => !!props.variant);
+      return () => _c$4() ? [(() => {
+        var _el$19 = _$createElement("text");
+        _$insertNode(_el$19, _$createTextNode(`\xB7`));
+        _$effect((_$p) => _$setProp(_el$19, "fg", fadeColor(theme.textMuted, 1), _$p));
+        return _el$19;
+      })(), (() => {
+        var _el$21 = _$createElement("text"), _el$22 = _$createElement("span");
+        _$insertNode(_el$21, _el$22);
+        _$insert(_el$22, () => props.variant);
+        _$effect((_$p) => _$setProp(_el$22, "style", {
+          fg: fadeColor(theme.warning, 1),
+          bold: true
+        }, _$p));
+        return _el$21;
+      })()] : null;
+    })(), null);
+    return _el$14;
+  })();
+}
+function DefaultPromptFooterSpacer(props) {
+  return (() => {
+    var _el$23 = _$createElement("box"), _el$24 = _$createElement("box");
+    _$insertNode(_el$23, _el$24);
+    _$setProp(_el$23, "height", 1);
+    _$setProp(_el$23, "border", ["left"]);
+    _$setProp(_el$24, "height", 1);
+    _$setProp(_el$24, "border", ["bottom"]);
+    _$effect((_p$) => {
+      var _v$6 = props.borderColor, _v$7 = {
         ...EmptyBorder,
-        vertical: theme.backgroundElement.a !== 0 ? "\u2579" : " "
-      }, _v$7 = theme.backgroundElement, _v$8 = theme.backgroundElement.a !== 0 ? {
+        vertical: props.theme.backgroundElement.a !== 0 ? "\u2579" : " "
+      }, _v$8 = props.theme.backgroundElement, _v$9 = props.theme.backgroundElement.a !== 0 ? {
         ...EmptyBorder,
         horizontal: "\u2580"
       } : {
         ...EmptyBorder,
         horizontal: " "
       };
-      _v$3 !== _p$.e && (_p$.e = _$setProp(_el$4, "visible", _v$3, _p$.e));
-      _v$4 !== _p$.t && (_p$.t = _$setProp(_el$5, "customBorderChars", _v$4, _p$.t));
-      _v$5 !== _p$.a && (_p$.a = _$setProp(_el$6, "backgroundColor", _v$5, _p$.a));
-      _v$6 !== _p$.o && (_p$.o = _$setProp(_el$9, "customBorderChars", _v$6, _p$.o));
-      _v$7 !== _p$.i && (_p$.i = _$setProp(_el$0, "borderColor", _v$7, _p$.i));
-      _v$8 !== _p$.n && (_p$.n = _$setProp(_el$0, "customBorderChars", _v$8, _p$.n));
+      _v$6 !== _p$.e && (_p$.e = _$setProp(_el$23, "borderColor", _v$6, _p$.e));
+      _v$7 !== _p$.t && (_p$.t = _$setProp(_el$23, "customBorderChars", _v$7, _p$.t));
+      _v$8 !== _p$.a && (_p$.a = _$setProp(_el$24, "borderColor", _v$8, _p$.a));
+      _v$9 !== _p$.o && (_p$.o = _$setProp(_el$24, "customBorderChars", _v$9, _p$.o));
       return _p$;
     }, {
       e: undefined,
       t: undefined,
       a: undefined,
-      o: undefined,
-      i: undefined,
-      n: undefined
+      o: undefined
     });
-    return _el$4;
+    return _el$23;
   })();
 }
+function DefaultPromptFooter(props) {
+  const theme = props.theme;
+  const mode = props.mode ?? "normal";
+  const status = props.status ?? {
+    type: "idle"
+  };
+  const usageText = [props.usage?.context, props.usage?.cost].filter((value) => Boolean(value)).join(" \xB7 ");
+  return (() => {
+    var _el$25 = _$createElement("box");
+    _$setProp(_el$25, "width", "100%");
+    _$setProp(_el$25, "flexDirection", "row");
+    _$setProp(_el$25, "justifyContent", "space-between");
+    _$insert(_el$25, (() => {
+      var _c$5 = _$memo(() => status.type !== "idle");
+      return () => _c$5() ? _$createComponent(DefaultPromptStatus, {
+        theme,
+        status
+      }) : props.hint ?? _$createElement("text");
+    })(), null);
+    _$insert(_el$25, (() => {
+      var _c$6 = _$memo(() => status.type !== "retry");
+      return () => _c$6() ? (() => {
+        var _el$27 = _$createElement("box");
+        _$setProp(_el$27, "gap", 2);
+        _$setProp(_el$27, "flexDirection", "row");
+        _$insert(_el$27, _$createComponent(Switch, {
+          get children() {
+            return [_$createComponent(Match, {
+              when: mode === "normal",
+              get children() {
+                return [_$memo(() => usageText ? (() => {
+                  var _el$28 = _$createElement("text");
+                  _$setProp(_el$28, "wrapMode", "none");
+                  _$insert(_el$28, usageText);
+                  _$effect((_$p) => _$setProp(_el$28, "fg", theme.textMuted, _$p));
+                  return _el$28;
+                })() : _$createComponent(DefaultPromptKeyHint, {
+                  theme,
+                  get hint() {
+                    return props.agentsKeyHint ?? "tab";
+                  },
+                  label: "agents"
+                })), _$createComponent(DefaultPromptKeyHint, {
+                  theme,
+                  get hint() {
+                    return props.commandsKeyHint ?? "/";
+                  },
+                  label: "commands"
+                })];
+              }
+            }), _$createComponent(Match, {
+              when: mode === "shell",
+              get children() {
+                return _$createComponent(DefaultPromptKeyHint, {
+                  theme,
+                  get hint() {
+                    return props.shellExitKeyHint ?? "esc";
+                  },
+                  label: "exit shell mode"
+                });
+              }
+            })];
+          }
+        }));
+        return _el$27;
+      })() : null;
+    })(), null);
+    return _el$25;
+  })();
+}
+function DefaultPromptStatus(props) {
+  const busyText = statusText(props.status);
+  return (() => {
+    var _el$29 = _$createElement("box"), _el$30 = _$createElement("box"), _el$31 = _$createElement("box"), _el$32 = _$createElement("text"), _el$34 = _$createElement("box"), _el$35 = _$createElement("text"), _el$36 = _$createTextNode(`esc `), _el$38 = _$createElement("span");
+    _$insertNode(_el$29, _el$30);
+    _$insertNode(_el$29, _el$35);
+    _$setProp(_el$29, "flexDirection", "row");
+    _$setProp(_el$29, "gap", 1);
+    _$setProp(_el$29, "flexGrow", 1);
+    _$insertNode(_el$30, _el$31);
+    _$insertNode(_el$30, _el$34);
+    _$setProp(_el$30, "flexShrink", 0);
+    _$setProp(_el$30, "flexDirection", "row");
+    _$setProp(_el$30, "gap", 1);
+    _$insertNode(_el$31, _el$32);
+    _$setProp(_el$31, "marginLeft", 1);
+    _$insertNode(_el$32, _$createTextNode(`[\u22EF]`));
+    _$setProp(_el$34, "flexDirection", "row");
+    _$setProp(_el$34, "gap", 1);
+    _$setProp(_el$34, "flexShrink", 0);
+    _$insert(_el$34, busyText ? (() => {
+      var _el$39 = _$createElement("text");
+      _$insert(_el$39, busyText);
+      _$effect((_$p) => _$setProp(_el$39, "fg", props.status.type === "retry" ? props.theme.error : props.theme.textMuted, _$p));
+      return _el$39;
+    })() : null);
+    _$insertNode(_el$35, _el$36);
+    _$insertNode(_el$35, _el$38);
+    _$insert(_el$38, () => props.status.interrupting ? "again to interrupt" : "interrupt");
+    _$effect((_p$) => {
+      var _v$0 = props.status.type === "retry" ? "space-between" : "flex-start", _v$1 = props.theme.textMuted, _v$10 = props.status.interrupting ? props.theme.primary : props.theme.text, _v$11 = {
+        fg: props.status.interrupting ? props.theme.primary : props.theme.textMuted
+      };
+      _v$0 !== _p$.e && (_p$.e = _$setProp(_el$29, "justifyContent", _v$0, _p$.e));
+      _v$1 !== _p$.t && (_p$.t = _$setProp(_el$32, "fg", _v$1, _p$.t));
+      _v$10 !== _p$.a && (_p$.a = _$setProp(_el$35, "fg", _v$10, _p$.a));
+      _v$11 !== _p$.o && (_p$.o = _$setProp(_el$38, "style", _v$11, _p$.o));
+      return _p$;
+    }, {
+      e: undefined,
+      t: undefined,
+      a: undefined,
+      o: undefined
+    });
+    return _el$29;
+  })();
+}
+function DefaultPromptChrome(props) {
+  const theme = props.theme;
+  const mode = props.mode ?? "normal";
+  const showAgentMeta = Boolean(props.modeLabel) || mode === "shell" || Boolean(props.agentName);
+  const highlight = props.leader ? theme.border : mode === "shell" ? theme.primary : props.agentColor ?? theme.border;
+  const borderHighlight = tint(theme.border, highlight, showAgentMeta ? 1 : 0);
+  return _$createComponent(DefaultPromptRoot, {
+    get visible() {
+      return props.visible;
+    },
+    get children() {
+      return [_$createComponent(DefaultPromptFrame, {
+        theme,
+        borderColor: borderHighlight,
+        get input() {
+          return props.input;
+        },
+        get onInputMouseDown() {
+          return props.onInputMouseDown;
+        },
+        get children() {
+          return _$createComponent(DefaultPromptMeta, _$mergeProps(props, {
+            mode,
+            highlight
+          }));
+        }
+      }), _$createComponent(DefaultPromptFooterSpacer, {
+        theme,
+        borderColor: borderHighlight
+      }), _$createComponent(DefaultPromptFooter, _$mergeProps(props, {
+        mode
+      }))];
+    }
+  });
+}
 function DefaultHomePromptMirror(props) {
+  const agentName = resolveAgentName(props.api);
+  const modelMeta = resolveModelMeta(props.api);
   return _$createComponent(DefaultPromptChrome, {
     get theme() {
       return props.api.theme.current;
@@ -16167,14 +16352,23 @@ function DefaultHomePromptMirror(props) {
     get input() {
       return props.input;
     },
+    get onInputMouseDown() {
+      return props.onInputMouseDown;
+    },
+    get modeLabelRef() {
+      return props.modeLabelRef;
+    },
     get visible() {
       return props.visible;
     },
     get mode() {
       return props.mode;
     },
+    get modeLabel() {
+      return props.modeLabel;
+    },
     get right() {
-      return props.right ?? renderDefaultHomePromptRight(props.api, props.slotProps.workspace_id);
+      return props.children;
     },
     get hint() {
       return props.hint;
@@ -16185,20 +16379,18 @@ function DefaultHomePromptMirror(props) {
     get usage() {
       return props.usage;
     },
-    get agentName() {
-      return props.agentName;
-    },
+    agentName,
     get agentColor() {
-      return props.agentColor;
+      return resolveAgentColor(props.api, agentName);
     },
     get modelName() {
-      return props.modelName;
+      return modelMeta.modelName;
     },
     get providerName() {
-      return props.providerName;
+      return modelMeta.providerName;
     },
     get variant() {
-      return props.variant;
+      return resolveAgentVariant(props.api, agentName);
     },
     get leader() {
       return props.leader;
@@ -16461,6 +16653,8 @@ class NvimRenderable extends BoxRenderable {
   boundBufferId = null;
   boundBufferDisposers = [];
   lastKnownChangedtick;
+  virtualTextNamespaceId;
+  virtualTextHighlightGroups = new Map;
   shownCompletionItems = [];
   popupmenuVisible = false;
   popupmenuItems = [];
@@ -16513,6 +16707,40 @@ class NvimRenderable extends BoxRenderable {
   }
   getMode() {
     return this.currentVimMode;
+  }
+  async setVirtualText(input) {
+    await this.bootPromise;
+    const buffer = this.requireBoundBuffer();
+    const namespaceId = await this.getVirtualTextNamespace();
+    buffer.clearNamespace({
+      lineEnd: -1,
+      lineStart: 0,
+      nsId: namespaceId
+    });
+    await this.neovimClient.lua([
+      "local bufnr, ns, line, col, chunks, position = ...",
+      "return vim.api.nvim_buf_set_extmark(bufnr, ns, line, col, {",
+      "  virt_text = chunks,",
+      "  virt_text_pos = position,",
+      "})"
+    ].join(`
+`), [
+      this.boundBufferId ?? 0,
+      namespaceId,
+      Math.max(0, Math.floor(input.line ?? 0)),
+      Math.max(0, Math.floor(input.col ?? 0)),
+      await this.normalizeVirtualTextChunks(input.chunks),
+      input.position ?? "eol"
+    ]);
+  }
+  async clearVirtualText() {
+    await this.bootPromise;
+    const buffer = this.requireBoundBuffer();
+    buffer.clearNamespace({
+      lineEnd: -1,
+      lineStart: 0,
+      nsId: await this.getVirtualTextNamespace()
+    });
   }
   async showCompletion(items, opts) {
     await this.bootPromise;
@@ -16712,6 +16940,15 @@ class NvimRenderable extends BoxRenderable {
   }
   async applyEditorOptions() {
     const commands = [];
+    if (this.options.hideCmdline) {
+      commands.push("set cmdheight=0 noshowcmd noruler");
+    }
+    if (this.options.hideStatusline) {
+      commands.push("set laststatus=0");
+    }
+    if (this.options.hideEndOfBuffer) {
+      commands.push("setlocal fillchars+=eob:\\ ");
+    }
     switch (this.options.wrapMode) {
       case "none":
         commands.push("setlocal nowrap nolinebreak");
@@ -16822,13 +17059,31 @@ class NvimRenderable extends BoxRenderable {
       this.cursorSyncPending = null;
       try {
         const window2 = await this.neovimClient.window;
-        const [line, col] = await window2.cursor;
+        const [[line, col], mode] = await Promise.all([
+          window2.cursor,
+          this.neovimClient.mode.catch(() => {
+            return;
+          })
+        ]);
+        const previousMode = this.currentVimMode;
+        if (mode && typeof mode.mode === "string") {
+          this.currentVimMode = mode.mode;
+        }
         this.lastKnownCursor = {
           line: Math.max(0, line - 1),
           col: Math.max(0, col),
           row: pending.row,
           grid: pending.grid
         };
+        if (previousMode !== this.currentVimMode) {
+          const cursorStyle = this.getCursorStyleForMode();
+          this.ctx.setCursorStyle(cursorStyle.style, cursorStyle.blinking);
+          this.options.onModeChange?.({
+            mode: this.currentVimMode,
+            previousMode,
+            cursorShape: cursorStyle
+          });
+        }
         this.options.onCursorChange?.({
           cursor: this.getCursorSnapshot(),
           mode: this.currentVimMode
@@ -16902,6 +17157,31 @@ class NvimRenderable extends BoxRenderable {
       info: fallback?.info,
       data: fallback?.data
     };
+  }
+  async getVirtualTextNamespace() {
+    if (typeof this.virtualTextNamespaceId === "number") {
+      return this.virtualTextNamespaceId;
+    }
+    this.virtualTextNamespaceId = await this.neovimClient.createNamespace("opentui-nvim-virtual-text");
+    return this.virtualTextNamespaceId;
+  }
+  async normalizeVirtualTextChunks(chunks) {
+    return await Promise.all(chunks.map(async (chunk) => {
+      const highlight = chunk.hlGroup ?? await this.getVirtualTextHighlight(chunk.color);
+      return highlight ? [chunk.text, highlight] : [chunk.text];
+    }));
+  }
+  async getVirtualTextHighlight(color) {
+    const hex = toNvimHex(color);
+    if (!hex)
+      return;
+    const existing = this.virtualTextHighlightGroups.get(hex);
+    if (existing)
+      return existing;
+    const group = `OpenTuiVirtualText${hex.replace(/[^a-zA-Z0-9]/g, "")}`;
+    await this.neovimClient.command(`highlight ${group} guifg=${hex}`);
+    this.virtualTextHighlightGroups.set(hex, group);
+    return group;
   }
   getCompletionItem(index) {
     if (index < 0)
@@ -17380,71 +17660,192 @@ class NvimRenderable extends BoxRenderable {
     }
   }
 }
-// plugin-entry.ts
+
+// src/NvimEditorRenderable.ts
+class NvimEditorRenderable extends NvimRenderable {
+  constructor(ctx, options) {
+    super(ctx, options);
+  }
+}
+
+// plugin-entry.tsx
+function formatModeLabel(mode) {
+  if (mode === "n")
+    return "NORMAL";
+  if (mode === "i" || mode === "ic" || mode === "ix")
+    return "INSERT";
+  if (mode === "v" || mode === "V" || mode === "\x16")
+    return "VISUAL";
+  if (mode === "R" || mode === "Rc" || mode === "Rx")
+    return "REPLACE";
+  if (mode === "c" || mode === "cv" || mode === "ce")
+    return "COMMAND";
+  if (mode === "s" || mode === "S" || mode === "\x13")
+    return "SELECT";
+  if (mode === "o")
+    return "OPERATOR";
+  if (mode.startsWith("cmdline"))
+    return "COMMAND";
+  if (mode === "normal")
+    return "NORMAL";
+  if (mode === "insert")
+    return "INSERT";
+  if (mode === "visual" || mode === "visual_select")
+    return "VISUAL";
+  if (mode === "replace")
+    return "REPLACE";
+  if (mode === "operator")
+    return "OPERATOR";
+  return mode.replace(/_/g, " ").toUpperCase();
+}
+function HomePrompt(props) {
+  const api = props.api;
+  const slotProps = props.slotProps;
+  let currentPrompt = {
+    input: "",
+    mode: "normal",
+    parts: []
+  };
+  const placeholderIndex = Math.floor(Math.random() * defaultHomePromptPlaceholders.normal.length);
+  const placeholder = getDefaultHomePromptPlaceholder("normal", placeholderIndex);
+  const placeholderColor = api.theme.current.textMuted;
+  const [modeLabel, setModeLabel] = createSignal("NORMAL");
+  const editor = new NvimEditorRenderable(api.renderer, {
+    backgroundColor: api.theme.current.backgroundElement,
+    border: false,
+    cursorColor: api.theme.current.primary,
+    height: 2,
+    hideCmdline: true,
+    hideEndOfBuffer: true,
+    hideStatusline: true,
+    onChange(event) {
+      currentPrompt = {
+        ...currentPrompt,
+        input: event.value
+      };
+      if (event.value.length === 0 && placeholder) {
+        editor.setVirtualText({
+          chunks: [{
+            color: placeholderColor,
+            text: placeholder
+          }],
+          col: 0,
+          line: 0,
+          position: "overlay"
+        });
+        return;
+      }
+      editor.clearVirtualText();
+    },
+    onModeChange(event) {
+      setModeLabel(formatModeLabel(event.mode));
+    },
+    onReady() {
+      setModeLabel(formatModeLabel(editor.getMode()));
+      if (!placeholder)
+        return;
+      editor.setVirtualText({
+        chunks: [{
+          color: placeholderColor,
+          text: placeholder
+        }],
+        col: 0,
+        line: 0,
+        position: "overlay"
+      });
+    },
+    selectionBg: api.theme.current.backgroundElement,
+    selectionFg: api.theme.current.text,
+    tabSize: 2,
+    textColor: api.theme.current.text,
+    wrapMode: "word"
+  });
+  const ref = {
+    get focused() {
+      return editor.focused;
+    },
+    get current() {
+      return currentPrompt;
+    },
+    set(prompt) {
+      currentPrompt = prompt;
+      editor.setValue(prompt.input).then(() => {
+        if (prompt.input.length === 0 && placeholder) {
+          return editor.setVirtualText({
+            chunks: [{
+              color: placeholderColor,
+              text: placeholder
+            }],
+            col: 0,
+            line: 0,
+            position: "overlay"
+          });
+        }
+        return editor.clearVirtualText();
+      });
+    },
+    reset() {
+      currentPrompt = {
+        input: "",
+        mode: "normal",
+        parts: []
+      };
+      editor.setValue("").then(() => {
+        if (!placeholder)
+          return;
+        return editor.setVirtualText({
+          chunks: [{
+            color: placeholderColor,
+            text: placeholder
+          }],
+          col: 0,
+          line: 0,
+          position: "overlay"
+        });
+      });
+    },
+    blur() {
+      editor.blur();
+    },
+    focus() {
+      editor.focus();
+    },
+    submit() {}
+  };
+  slotProps.ref?.(ref);
+  onCleanup(() => slotProps.ref?.(undefined));
+  setTimeout(() => editor.focus(), 1);
+  return _$createComponent2(DefaultHomePromptMirror, {
+    get agentsKeyHint() {
+      return api.keybind.print("agent_cycle");
+    },
+    api,
+    get commandsKeyHint() {
+      return api.keybind.print("command_list");
+    },
+    input: editor,
+    get modeLabel() {
+      return modeLabel();
+    },
+    onInputMouseDown: () => {
+      editor.focus();
+    },
+    get children() {
+      return _$createComponent2(DefaultHomePromptRight, {
+        api,
+        get workspace_id() {
+          return slotProps.workspace_id;
+        }
+      });
+    }
+  });
+}
 var tui = async (api) => {
   api.slots.register({
     slots: {
       home_prompt(_ctx, slotProps) {
-        let currentPrompt = {
-          input: "",
-          mode: "normal",
-          parts: []
-        };
-        const editor = new NvimRenderable(api.renderer, {
-          border: false,
-          cursorColor: api.theme.current.primary,
-          height: 6,
-          onChange(event) {
-            currentPrompt = {
-              ...currentPrompt,
-              input: event.value
-            };
-          },
-          selectionBg: api.theme.current.backgroundElement,
-          backgroundColor: api.theme.current.backgroundElement,
-          selectionFg: api.theme.current.text,
-          tabSize: 2,
-          textColor: api.theme.current.text,
-          wrapMode: "word"
-        });
-        const ref = {
-          get focused() {
-            return editor.focused;
-          },
-          get current() {
-            return currentPrompt;
-          },
-          set(prompt) {
-            currentPrompt = prompt;
-            editor.setValue(prompt.input);
-          },
-          reset() {
-            currentPrompt = {
-              input: "",
-              mode: "normal",
-              parts: []
-            };
-            editor.setValue("");
-          },
-          blur() {
-            editor.blur();
-          },
-          focus() {
-            editor.focus();
-          },
-          submit() {}
-        };
-        slotProps.ref?.(ref);
-        queueMicrotask(() => editor.focus());
-        return DefaultHomePromptMirror({
-          agentsKeyHint: api.keybind.print("agent_cycle"),
-          modelName: "GPT-5.4",
-          providerName: "OpenAI",
-          agentName: "Build",
-          variant: "xhigh",
+        return _$createComponent2(HomePrompt, {
           api,
-          commandsKeyHint: api.keybind.print("command_list"),
-          input: editor,
           slotProps
         });
       }

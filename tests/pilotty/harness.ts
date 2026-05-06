@@ -18,6 +18,9 @@ type HarnessConfig = {
 
 type HarnessOptions = {
   argv?: string[];
+  hideCmdline?: boolean;
+  hideEndOfBuffer?: boolean;
+  hideStatusline?: boolean;
   logRpc?: boolean;
   value?: string;
   wrapMode?: "none" | "char" | "word";
